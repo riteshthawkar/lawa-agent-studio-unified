@@ -710,6 +710,7 @@ EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)  # For port 465
 EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
+RESEND_API_KEY = env('RESEND_API_KEY', default=None)
 EMAIL_TIMEOUT = env.int('EMAIL_TIMEOUT', default=10)  # 10 seconds timeout
 
 # SSL/TLS Configuration for Email
