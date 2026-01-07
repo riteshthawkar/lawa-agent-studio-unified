@@ -90,8 +90,8 @@ services:
   # ---------------------------------------------------------------------------
   indexing-service:
     build:
-      context: ./website_indexing_backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: website_indexing_backend/Dockerfile
     image: lawa-indexing-service:latest
     restart: always
     ports:
