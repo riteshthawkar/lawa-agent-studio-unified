@@ -48,8 +48,6 @@ services:
     volumes:
       - shared_data:/app/data # Shared data directory
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       indexing-service:
@@ -57,11 +55,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=lawa_platform
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      # Use DB credentials from .env file (managed database)
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=True
       # Override localhost with container name for internal communication
@@ -78,16 +72,11 @@ services:
     volumes:
       - shared_data:/app/data
     depends_on:
-      - db
       - redis
     env_file:
       - ./backend/.env
     environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=lawa_platform
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      # Use DB credentials from .env file (managed database)
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=True
       - INDEXING_API_BASE=http://indexing-service:8080
@@ -110,12 +99,7 @@ services:
       - ./website_indexing_backend/.env
     environment:
       - DATA_DIR=/app/data
-      # If it uses DB, point it to the shared DB
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=lawa_platform # Or lawa-indexing-database if using separate logical DBs in same server
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      # Use DB credentials from .env file (managed database)
     command: python start_api.py --host 0.0.0.0 --port 8080
 
   # ---------------------------------------------------------------------------
@@ -132,23 +116,13 @@ services:
     volumes:
       - shared_data:/app/data
     depends_on:
-      - db
       - redis
     env_file:
       - ./EMBEDDED_CHATBOT/backend/.env
     environment:
       - HOST=0.0.0.0
       - PORT=8002
-      - DB_HOST=db
-      - DB_PORT=5432
-      # Ensure it connects to the same DB as Django if they share schemas/sessions
-      - DB_NAME=lawa_platform
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DJANGO_DB_HOST=db
-      - DJANGO_DB_NAME=lawa_platform
-      - DJANGO_DB_USER=postgres
-      - DJANGO_DB_PASSWORD=postgres
+      # Use DB credentials from .env file (managed database)
     command: python main.py
 
 volumes:

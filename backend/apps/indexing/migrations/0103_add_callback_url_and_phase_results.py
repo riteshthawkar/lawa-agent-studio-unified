@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('indexing', '0102_remove_indexingjob_idx_job_site_status_idx_and_more'),
+        ('indexing', '0101_remove_indexingjob_idx_job_site_status_idx_and_more'),
     ]
 
     operations = [
