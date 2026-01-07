@@ -81,7 +81,7 @@ services:
       - DB_HOST=db
       - REDIS_URL=redis://redis:6379/0
       - INDEXING_API_BASE=http://indexing-service:8080
-    command: python manage.py celery -A lawa_platform worker -l info
+    command: celery -A lawa_platform worker -l info
 
   # ---------------------------------------------------------------------------
   # WEBSITE INDEXING SERVICE (Port 8080)

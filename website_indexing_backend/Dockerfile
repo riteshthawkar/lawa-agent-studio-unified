@@ -47,6 +47,8 @@ RUN playwright install-deps chromium
 # We copy both the service code and the backend dependency
 COPY website_indexing_backend/ website_indexing_backend/
 COPY backend/ backend/
+# Create logs directory for the shared backend code (required by Django settings)
+RUN mkdir -p backend/logs && chmod 777 backend/logs
 
 # Switch to service directory for runtime
 WORKDIR /app/website_indexing_backend
