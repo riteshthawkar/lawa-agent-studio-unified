@@ -97,7 +97,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./website_indexing_backend:/app
+      - ./website_indexing_backend:/app/website_indexing_backend
       - shared_data:/app/data # Writes files here
     env_file:
       - ./website_indexing_backend/.env

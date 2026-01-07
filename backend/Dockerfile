@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create logs directory
-RUN mkdir -p logs
+# Create logs directory and ensure it's writable
+RUN mkdir -p logs && chmod 777 logs
 
 # Create static files directory
 RUN mkdir -p staticfiles
