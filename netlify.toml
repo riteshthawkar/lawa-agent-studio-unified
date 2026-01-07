@@ -1,0 +1,17 @@
+[build]
+  base = "frontend/webbotify"
+  publish = "dist"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+  VITE_API_URL = "http://139.59.4.82:8000"
+  VITE_CHATBOT_BACKEND_URL = "http://139.59.4.82:8002"
+  VITE_INDEXING_API_URL = "http://139.59.4.82:8080"
+  VITE_APP_ENV = "production"
+
+# Handle SPA routing - redirect all routes to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
