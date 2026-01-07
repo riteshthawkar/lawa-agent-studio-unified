@@ -1,0 +1,82 @@
+# Clean pipeline configuration
+# Single configuration file for all pipeline stages
+
+pipeline:
+  run_name: default
+  stages:
+    - stream_index  # Use streaming mode by default
+  resume: true
+  force_stages: []
+
+# Paths configuration
+paths:
+  root: .
+  output_data: data/raw
+  output_data_clean: data/clean
+  output_data_md: data/html_md
+  pdf_input_dir: data/raw
+  pdf_md_dir: data/pdf_md
+  pdf_pages_dir: data/pdf_pages
+  mappings_dir: data/mappings
+  combined_md_dir: combined_md_files
+  summaries_dir: data/summaries
+  embeddings_dir: data/embeddings
+
+# Crawler configuration
+crawler:
+  start_url: "https://mbzuai.gitbook.io/mbzuai-student-handbook-and-catalogue"
+  max_pages: 1000
+  fetch_concurrency: 10
+  download_concurrency: 20
+  timeout: 30
+  output_dir: "data/raw"
+  state_file: "crawl_state.json"
+  mapping_file: "mappings.json"
+  allowed_domains: []
+  excluded_subdomains: 
+    - "dclibrary.mbzuai.ac.ae"
+    - "mlfp.mbzuai.ac.ae"
+    - "cvfp.mbzuai.ac.ae"
+    - "library.mbzuai.ac.ae"
+  stealth: true
+  headless: true
+  default_delay: 1.0
+  max_file_size_mb: 500
+  dynamic_scroll_count: 5
+  dynamic_scroll_delay: 1
+  dynamic_click_selectors: []
+  dynamic_action_delay: 5
+  autosave_interval_sec: 60
+  auto_restart: false
+  max_restarts: 3
+  restart_backoff_sec: 5
+
+# Processing configuration
+processing:
+  html_workers: 8
+  pdf_concurrency: 8
+  pdf_enabled: true
+  chunking_enabled: true
+  summaries_enabled: false
+  summary_model: "llama-3.3-70b-versatile"
+  max_batch_size: 25
+  retry_attempts: 3
+  retry_delay: 5
+  batch_delay: 1
+  max_tokens: 32000
+  temperature: 0.1
+  chunk_size: 50000
+
+# Embedding configuration
+embedding:
+  pinecone_index: "stream-index"
+  embed_model: "sentence-transformers/all-MiniLM-L6-v2"
+  include_full_content: false
+  include_summary: true
+  final_combined_json: "data/Final_combined_data.json"
+  formatted_output: "data/embeddings/summary_only_documents.json"
+
+# Logging configuration
+logging:
+  level: INFO
+  file: "data/pipeline.log"

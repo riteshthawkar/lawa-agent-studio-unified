@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback Status Updated</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f4f5;
+            color: #18181b;
+            margin: 0;
+            padding: 0;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e4e4e7;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo h1 {
+            color: #18181b;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0;
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 16px;
+            color: #18181b;
+        }
+        p {
+            color: #52525b;
+            margin-bottom: 16px;
+            font-size: 16px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 9999px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .status-pending { background-color: #fef9c3; color: #854d0e; }
+        .status-in_review { background-color: #dbeafe; color: #1e40af; }
+        .status-in_progress { background-color: #e0e7ff; color: #3730a3; }
+        .status-resolved { background-color: #d1fae5; color: #065f46; }
+        .status-closed { background-color: #e5e7eb; color: #374151; }
+        .status-wont_fix { background-color: #fee2e2; color: #991b1b; }
+        .status-update-box {
+            background-color: #f4f4f5;
+            border-radius: 8px;
+            padding: 24px;
+            margin: 24px 0;
+            text-align: center;
+        }
+        .status-arrow {
+            display: inline-block;
+            margin: 0 16px;
+            color: #71717a;
+            font-size: 20px;
+        }
+        .info-box {
+            background-color: #fafafa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 24px 0;
+            border-left: 4px solid #3b82f6;
+        }
+        .info-box h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #18181b;
+        }
+        .info-box p {
+            margin: 0;
+            color: #52525b;
+            font-size: 14px;
+        }
+        .message-box {
+            background-color: #fafafa;
+            border-left: 4px solid #10b981;
+            padding: 16px;
+            margin: 24px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .message-box h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #065f46;
+        }
+        .message-box p {
+            margin: 0;
+            color: #374151;
+            white-space: pre-wrap;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #18181b;
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+        .btn-secondary {
+            background-color: #ffffff;
+            color: #18181b !important;
+            border: 1px solid #e4e4e7;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 32px;
+            font-size: 12px;
+            color: #a1a1aa;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #e4e4e7;
+            margin: 24px 0;
+        }
+        .resolved-note {
+            background-color: #d1fae5;
+            border: 1px solid #a7f3d0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .resolved-note p {
+            color: #065f46;
+            font-weight: 500;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">
+                <h1>Lawa Webbotify</h1>
+            </div>
+
+            {% if new_status_value == 'resolved' %}
+            <div class="resolved-note">
+                <p>Great news! Your feedback has been resolved.</p>
+            </div>
+            {% endif %}
+
+            <h2>{% if user_name %}Hi {{ user_name }},{% else %}Hello,{% endif %}</h2>
+
+            <p>The status of your <strong>{{ feedback_type_display }}</strong> has been updated.</p>
+
+            <div class="status-update-box">
+                <span class="status-badge status-{{ old_status|lower }}">{{ old_status }}</span>
+                <span class="status-arrow">&rarr;</span>
+                <span class="status-badge status-{{ new_status_value }}">{{ new_status }}</span>
+            </div>
+
+            <div class="info-box">
+                <h4>Your Submission</h4>
+                <p>{% if subject %}{{ subject }}{% else %}{{ feedback_type_display }}{% endif %}</p>
+                <p style="font-size: 12px; color: #71717a; margin-top: 8px;">Submitted on {{ submitted_at }}</p>
+            </div>
+
+            {% if admin_notes %}
+            <div class="message-box">
+                <h4>Message from our team:</h4>
+                <p>{{ admin_notes }}</p>
+            </div>
+            {% endif %}
+
+            {% if new_status_value == 'resolved' or new_status_value == 'closed' %}
+            <p>Thank you for taking the time to share your feedback. Your input helps us improve Lawa Webbotify for everyone.</p>
+            {% elif new_status_value == 'in_progress' %}
+            <p>Our team is actively working on this. We'll keep you updated on any progress.</p>
+            {% elif new_status_value == 'in_review' %}
+            <p>Our team is reviewing your feedback and will update you once we have more information.</p>
+            {% elif new_status_value == 'wont_fix' %}
+            <p>After careful consideration, we've decided not to proceed with this request at this time. If you have any questions, please don't hesitate to reach out.</p>
+            {% endif %}
+
+            <hr class="divider">
+
+            <p style="text-align: center; color: #71717a;">
+                Have questions? Visit our Help Center for assistance.
+            </p>
+
+            <div style="text-align: center;">
+                <a href="{{ help_center_url }}" class="btn btn-secondary">Visit Help Center</a>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>This email was sent regarding your feedback submission.</p>
+            <p>&copy; {% now "Y" %} Lawa Webbotify. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

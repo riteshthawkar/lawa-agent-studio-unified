@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Feedback Received</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f4f5;
+            color: #18181b;
+            margin: 0;
+            padding: 0;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e4e4e7;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo h1 {
+            color: #18181b;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0;
+        }
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 16px;
+            color: #18181b;
+        }
+        p {
+            color: #52525b;
+            margin-bottom: 16px;
+            font-size: 16px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-bug { background-color: #fee2e2; color: #991b1b; }
+        .badge-feature { background-color: #dbeafe; color: #1e40af; }
+        .badge-general { background-color: #e5e7eb; color: #374151; }
+        .badge-complaint { background-color: #fed7aa; color: #9a3412; }
+        .badge-praise { background-color: #d1fae5; color: #065f46; }
+        .badge-critical { background-color: #fee2e2; color: #991b1b; }
+        .badge-high { background-color: #fed7aa; color: #9a3412; }
+        .badge-medium { background-color: #dbeafe; color: #1e40af; }
+        .badge-low { background-color: #e5e7eb; color: #374151; }
+        .info-box {
+            background-color: #f4f4f5;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 24px 0;
+        }
+        .info-row {
+            display: flex;
+            margin-bottom: 12px;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #71717a;
+            width: 100px;
+            font-size: 14px;
+        }
+        .info-value {
+            color: #18181b;
+            flex: 1;
+            font-size: 14px;
+        }
+        .message-box {
+            background-color: #fafafa;
+            border-left: 4px solid #3b82f6;
+            padding: 16px;
+            margin: 24px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .message-box p {
+            margin: 0;
+            white-space: pre-wrap;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #18181b;
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 32px;
+            font-size: 12px;
+            color: #a1a1aa;
+        }
+        .alert-critical {
+            background-color: #fee2e2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .alert-critical p {
+            color: #991b1b;
+            font-weight: 600;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">
+                <h1>Lawa Webbotify</h1>
+            </div>
+
+            {% if priority == 'critical' %}
+            <div class="alert-critical">
+                <p>CRITICAL PRIORITY FEEDBACK</p>
+            </div>
+            {% endif %}
+
+            <h2>New {{ feedback_type_display }} Received</h2>
+
+            <p>A new feedback submission requires your attention.</p>
+
+            <div class="info-box">
+                <div class="info-row">
+                    <span class="info-label">Type:</span>
+                    <span class="info-value">
+                        <span class="badge badge-{{ feedback_type }}">{{ feedback_type_display }}</span>
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Priority:</span>
+                    <span class="info-value">
+                        <span class="badge badge-{{ priority }}">{{ priority }}</span>
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">From:</span>
+                    <span class="info-value">{{ user_email }}</span>
+                </div>
+                {% if user_name %}
+                <div class="info-row">
+                    <span class="info-label">Name:</span>
+                    <span class="info-value">{{ user_name }}</span>
+                </div>
+                {% endif %}
+                {% if subject %}
+                <div class="info-row">
+                    <span class="info-label">Subject:</span>
+                    <span class="info-value">{{ subject }}</span>
+                </div>
+                {% endif %}
+                <div class="info-row">
+                    <span class="info-label">Submitted:</span>
+                    <span class="info-value">{{ submitted_at }}</span>
+                </div>
+            </div>
+
+            <h3 style="font-size: 16px; margin-bottom: 8px;">Message:</h3>
+            <div class="message-box">
+                <p>{{ message }}</p>
+            </div>
+
+            {% if steps_to_reproduce %}
+            <h3 style="font-size: 16px; margin-bottom: 8px;">Steps to Reproduce:</h3>
+            <div class="message-box">
+                <p>{{ steps_to_reproduce }}</p>
+            </div>
+            {% endif %}
+
+            {% if expected_behavior %}
+            <h3 style="font-size: 16px; margin-bottom: 8px;">Expected Behavior:</h3>
+            <div class="message-box">
+                <p>{{ expected_behavior }}</p>
+            </div>
+            {% endif %}
+
+            {% if actual_behavior %}
+            <h3 style="font-size: 16px; margin-bottom: 8px;">Actual Behavior:</h3>
+            <div class="message-box">
+                <p>{{ actual_behavior }}</p>
+            </div>
+            {% endif %}
+
+            <div style="text-align: center;">
+                <a href="{{ admin_url }}" class="btn">View in Admin Panel</a>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>&copy; {% now "Y" %} Lawa Webbotify. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

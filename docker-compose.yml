@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # INFRASTRUCTURE
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=lawa_platform
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MAIN DJANGO BACKEND (Port 8000)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: lawa-backend:latest
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - shared_data:/app/data # Shared data directory
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      indexing-service:
+        condition: service_started
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://redis:6379/0
+      # Override localhost with container name for internal communication
+      - INDEXING_API_BASE=http://indexing-service:8080
+      - CHATBOT_API_BASE=http://chatbot-service:8002
+    command: gunicorn --bind 0.0.0.0:8000 --workers 3 lawa_platform.wsgi:application
+
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: lawa-backend:latest
+    restart: always
+    volumes:
+      - ./backend:/app
+      - shared_data:/app/data
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_HOST=db
+      - REDIS_URL=redis://redis:6379/0
+      - INDEXING_API_BASE=http://indexing-service:8080
+    command: python manage.py celery -A lawa_platform worker -l info
+
+  # ---------------------------------------------------------------------------
+  # WEBSITE INDEXING SERVICE (Port 8080)
+  # ---------------------------------------------------------------------------
+  indexing-service:
+    build:
+      context: ./website_indexing_backend
+      dockerfile: Dockerfile
+    image: lawa-indexing-service:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./website_indexing_backend:/app
+      - shared_data:/app/data # Writes files here
+    env_file:
+      - ./website_indexing_backend/.env
+    environment:
+      - DATA_DIR=/app/data
+      # If it uses DB, point it to the shared DB
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=lawa_platform # Or lawa-indexing-database if using separate logical DBs in same server
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    command: python start_api.py --host 0.0.0.0 --port 8080
+
+  # ---------------------------------------------------------------------------
+  # CHATBOT WIDGET BACKEND (Port 8002)
+  # ---------------------------------------------------------------------------
+  chatbot-service:
+    build:
+      context: ./EMBEDDED_CHATBOT/backend
+      dockerfile: Dockerfile
+    image: lawa-chatbot-service:latest
+    restart: always
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./EMBEDDED_CHATBOT/backend:/app
+      - shared_data:/app/data
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - ./EMBEDDED_CHATBOT/backend/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8002
+      - DB_HOST=db
+      - DB_PORT=5432
+      # Ensure it connects to the same DB as Django if they share schemas/sessions
+      - DB_NAME=lawa_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DJANGO_DB_HOST=db
+      - DJANGO_DB_NAME=lawa_platform
+      - DJANGO_DB_USER=postgres
+      - DJANGO_DB_PASSWORD=postgres
+    command: python main.py
+
+volumes:
+  postgres_data:
+  redis_data:
+  shared_data:
+
+
+networks:
+  default:
+    name: lawa-network
