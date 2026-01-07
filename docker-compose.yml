@@ -46,7 +46,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
       - shared_data:/app/data # Shared data directory
     depends_on:
       db:
@@ -72,7 +71,6 @@ services:
     image: lawa-backend:latest
     restart: always
     volumes:
-      - ./backend:/app
       - shared_data:/app/data
     depends_on:
       - db
@@ -97,7 +95,6 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./website_indexing_backend:/app/website_indexing_backend
       - shared_data:/app/data # Writes files here
     env_file:
       - ./website_indexing_backend/.env
@@ -123,7 +120,6 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ./EMBEDDED_CHATBOT/backend:/app
       - shared_data:/app/data
     depends_on:
       - db
