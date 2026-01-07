@@ -59,6 +59,7 @@ services:
     environment:
       - DB_HOST=db
       - REDIS_URL=redis://redis:6379/0
+      - USE_REDIS=True
       # Override localhost with container name for internal communication
       - INDEXING_API_BASE=http://indexing-service:8080
       - CHATBOT_API_BASE=http://chatbot-service:8002
@@ -80,6 +81,7 @@ services:
     environment:
       - DB_HOST=db
       - REDIS_URL=redis://redis:6379/0
+      - USE_REDIS=True
       - INDEXING_API_BASE=http://indexing-service:8080
     command: celery -A lawa_platform worker -l info
 
