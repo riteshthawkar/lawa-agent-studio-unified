@@ -303,7 +303,7 @@ class PipelineConfig:
             autosave_interval_sec=crawler_data.get("autosave_interval_sec", 60),
             auto_restart=crawler_data.get("auto_restart", False),
             max_restarts=crawler_data.get("max_restarts", 3),
-            max_restarts=crawler_data.get("max_restarts", 3),
+
             restart_backoff_sec=crawler_data.get("restart_backoff_sec", 5),
             remove_overlay_elements=crawler_data.get("remove_overlay_elements", False)
         )
