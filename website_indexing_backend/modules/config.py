@@ -40,7 +40,7 @@ class CrawlerConfig:
     magic: bool = True  # Bug #14 fix: Enable JavaScript rendering by default
     wait_for: str = ""
     css_selector: str = ""
-    remove_overlay_elements: bool = True  # Remove overlays by default
+    remove_overlay_elements: bool = False  # Bug fix: Default to False to prevent navbar removal
     # Advanced dynamic content handling (Bug #14 fix: Enable by default)
     infinite_scroll_enabled: bool = True  # Enable infinite scroll handling
     infinite_scroll_max_scrolls: int = 20
@@ -51,7 +51,7 @@ class CrawlerConfig:
     dynamic_content_wait: float = 5.0  # Timeout for dynamic content loading
     # Link extraction enhancement - ensures all links are discovered
     scan_full_page: bool = True  # Enable full page scanning for better link extraction
-    delay_before_return_html: float = 2.0  # Seconds to wait after page load before extracting links
+    delay_before_return_html: float = 3.0  # Seconds to wait after page load before extracting links
     # Subdomain discovery
     scrape_all_subdomains: bool = False
     include_subdomains: List[str] = field(default_factory=list)
@@ -303,8 +303,14 @@ class PipelineConfig:
             autosave_interval_sec=crawler_data.get("autosave_interval_sec", 60),
             auto_restart=crawler_data.get("auto_restart", False),
             max_restarts=crawler_data.get("max_restarts", 3),
-            restart_backoff_sec=crawler_data.get("restart_backoff_sec", 5)
+            max_restarts=crawler_data.get("max_restarts", 3),
+            restart_backoff_sec=crawler_data.get("restart_backoff_sec", 5),
+            remove_overlay_elements=crawler_data.get("remove_overlay_elements", False)
         )
+        
+        # Override crawler config with environment variables
+        if os.getenv("CRAWLER_REMOVE_OVERLAYS"):
+            crawler_config.remove_overlay_elements = os.getenv("CRAWLER_REMOVE_OVERLAYS").lower() == "true"
         
         # Create processing config
         processing_config = ProcessingConfig(

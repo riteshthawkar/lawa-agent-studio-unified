@@ -93,7 +93,8 @@ class URLCollector:
         try:
             logger.info(f"🚀 Starting Deep Crawl from {self.start_url}")
             logger.info(f"   Dynamic content: magic={self.config.magic}, "
-                       f"infinite_scroll={self.config.infinite_scroll_enabled}")
+                       f"infinite_scroll={self.config.infinite_scroll_enabled}, "
+                       f"remove_overlays={self.config.remove_overlay_elements}")
             start_time = time.time()
 
             # Configure Deep Crawl Strategy
