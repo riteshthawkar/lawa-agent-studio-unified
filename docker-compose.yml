@@ -58,6 +58,10 @@ services:
       - ./backend/.env
     environment:
       - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=lawa_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=True
       # Override localhost with container name for internal communication
@@ -80,6 +84,10 @@ services:
       - ./backend/.env
     environment:
       - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=lawa_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379/0
       - USE_REDIS=True
       - INDEXING_API_BASE=http://indexing-service:8080
