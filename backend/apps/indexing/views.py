@@ -15,6 +15,7 @@ from django.core.validators import URLValidator
 from urllib.parse import urlparse
 import logging
 from apps.core.logging_config import get_logger
+from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
 from .models import IndexingJob, IndexedPage
 from .serializers import (
     IndexingJobSerializer,
@@ -572,10 +573,15 @@ def site_indexed_pages(request, site_id):
     - offset: Pagination offset
     - search: Search in URL and title
     """
-    site = get_object_or_404(Site, id=site_id)
-
-    # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Validate site access using user's organization memberships
+    try:
+        site = check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
+        return Response(
+            {'error': 'Site not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -661,10 +667,15 @@ def add_indexed_page(request, site_id):
     """
     from django.db import transaction
 
-    site = get_object_or_404(Site, id=site_id)
-
-    # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Validate site access using user's organization memberships
+    try:
+        site = check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
+        return Response(
+            {'error': 'Site not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -774,10 +785,15 @@ def bulk_delete_indexed_pages(request, site_id):
     Request body:
     - page_ids: List of page IDs to delete (max 100)
     """
-    site = get_object_or_404(Site, id=site_id)
-
-    # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Validate site access using user's organization memberships
+    try:
+        site = check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
+        return Response(
+            {'error': 'Site not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
