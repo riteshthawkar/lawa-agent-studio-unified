@@ -84,14 +84,22 @@ class ChatbotService:
             }
             
         except requests.exceptions.RequestException as e:
-            # Fallback response for development
-            return {
-                'assistant_message': f"I'm sorry, I'm having trouble connecting to the chatbot service. Error: {str(e)}",
-                'citations': [],
-                'tokens_in': 0,
-                'tokens_out': 20,
-                'latency_ms': int((time.time() - start_time) * 1000)
-            }
+            from apps.core.exceptions import ChatbotServiceException
+            
+            # Extract error message from response if available
+            error_msg = str(e)
+            status_code = 503
+            
+            if hasattr(e, 'response') and e.response is not None:
+                status_code = e.response.status_code
+                try:
+                    error_json = e.response.json()
+                    error_msg = error_json.get('detail') or error_json.get('message') or str(e)
+                except ValueError:
+                    # Not JSON
+                    error_msg = e.response.text or str(e)
+            
+            raise ChatbotServiceException(error_msg, status_code=status_code)
     
     def create_session(self, chatbot, site, user_id=None, meta=None):
         """Create a new chat session"""

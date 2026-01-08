@@ -12,24 +12,61 @@ def custom_exception_handler(exc, context):
     # Call REST framework's default exception handler first
     response = exception_handler(exc, context)
 
-    # Handle standard JSON decode errors if not caught by DRF
+    # If response is None, it's an unhandled exception (System Error / 500)
     if response is None:
-        from json import JSONDecodeError
-        if isinstance(exc, JSONDecodeError):
-            response = Response(
-                {'detail': 'JSON parse error - invalid format'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
+        # Get request ID for logging
+        request = context.get('request')
+        request_id = getattr(request, 'request_id', 'unknown') if request else 'unknown'
+        
+        # Log the full traceback internally
+        logger.error(
+            f"Unhandled System Error: {exc}",
+            extra={
+                'request_id': request_id,
+                'error_type': type(exc).__name__,
+            },
+            exc_info=True
+        )
+        
+        # Return generic error to user
+        response = Response(
+            {
+                'error': {
+                    'code': 'internal_server_error',
+                    'message': 'An unexpected system error occurred. Please try again later.',
+                    'request_id': request_id
+                }
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        # We return early since we already formatted the response
+        return response
+
     if response is not None:
         # Get the request for additional context
         request = context.get('request')
         request_id = getattr(request, 'request_id', '') if request else ''
         
+        # Determine error code
+        code = getattr(exc, 'code', None)
+        if not code:
+            if hasattr(exc, 'get_codes'):
+                codes = exc.get_codes()
+                if isinstance(codes, str):
+                    code = codes
+                elif isinstance(codes, list) and codes:
+                    code = codes[0]
+                elif isinstance(codes, dict):
+                    # For field errors, just use generic validation_error
+                    code = 'validation_error'
+            
+        if not code:
+            code = getattr(exc, 'default_code', 'api_error')
+
         # Customize the error response
         custom_response_data = {
             'error': {
-                'code': getattr(exc, 'code', 'unknown_error'),
+                'code': code,
                 'message': str(exc),
                 'details': getattr(exc, 'details', None),
                 'request_id': request_id,
@@ -48,7 +85,7 @@ def custom_exception_handler(exc, context):
         response.data = custom_response_data
         
         # Log the error
-        logger.error(
+        logger.warning(
             f"API Error: {exc}",
             extra={
                 'request_id': request_id,
@@ -96,3 +133,11 @@ class InvalidWebhookSignature(LawaPlatformException):
     
     def __init__(self, message="Invalid webhook signature", details=None):
         super().__init__(message, 'invalid_webhook_signature', details)
+
+
+class ChatbotServiceException(LawaPlatformException):
+    """Raised when external chatbot service fails"""
+    
+    def __init__(self, message, status_code=503, details=None):
+        self.status_code = status_code
+        super().__init__(message, 'chatbot_service_error', details)

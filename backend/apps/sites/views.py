@@ -45,13 +45,70 @@ class SiteViewSet(BaseViewSet):
         return SiteSerializer
 
     def get_queryset(self):
-        """Get all sites - simplified for MVP"""
-        return super().get_queryset()
+        """
+        Get all sites the user has access to.
+        Overriding BaseViewSet to properly handle multi-org users.
+        """
+        if getattr(self, 'swagger_fake_view', False):
+            return Site.objects.none()
+            
+        request = self.request
+        if not request.user.is_authenticated:
+            return Site.objects.none()
+            
+        from apps.core.organization_permissions import get_user_organizations
+        user_orgs = get_user_organizations(request.user)
+        
+        # Filter sites belonging to any of the user's organizations
+        return Site.objects.filter(org_id__in=user_orgs.values('id'))
 
     def create(self, request, *args, **kwargs):
-        """Create new site with quota enforcement"""
-        # Check site limit before creating
+        """Create new site with auto-organization provisioning"""
+        # Determine organization
         org_id = getattr(request, 'org_id', None)
+        
+        from apps.core.organization_permissions import get_user_organizations
+        from apps.organizations.models import Organization, Membership
+        
+        # 1. Try to find existing orgs
+        user_orgs = get_user_organizations(request.user)
+        
+        if not org_id:
+            if user_orgs.exists():
+                # Default to first organization if not specified
+                org_id = str(user_orgs.first().id)
+            else:
+                # 2. Auto-create "Personal Organization" if none exist
+                user_email = request.user.email or request.user.username
+                org_name = f"{user_email.split('@')[0]}'s Workspace"
+                
+                # Create slug from name
+                import slugify
+                base_slug = slugify.slugify(org_name)
+                slug = base_slug
+                counter = 1
+                while Organization.objects.filter(slug=slug).exists():
+                    slug = f"{base_slug}-{counter}"
+                    counter += 1
+                
+                org = Organization.objects.create(
+                    name=org_name,
+                    slug=slug,
+                    status='active',
+                    plan_tier='basic'
+                )
+                
+                # Add user as owner
+                Membership.objects.create(
+                    user=request.user,
+                    organization=org,
+                    role='owner'
+                )
+                
+                org_id = str(org.id)
+                logger.info(f"Auto-created personal organization {org.id} for user {request.user.id}")
+        
+        # Check site limit before creating
         if org_id:
             try:
                 QuotaService.enforce_site_limit(org_id)
@@ -64,12 +121,8 @@ class SiteViewSet(BaseViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        # Bug fix: Scope project uniqueness to organization
-        save_kwargs = {}
-        if org_id:
-            save_kwargs['org_id'] = org_id
-            
-        site = serializer.save(**save_kwargs)
+        # Save with org_id
+        site = serializer.save(org_id=org_id)
         
         return Response(
             SiteSerializer(site).data,
@@ -188,7 +241,11 @@ def site_excluded_patterns(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -266,7 +323,11 @@ def add_excluded_pattern(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -335,7 +396,11 @@ def bulk_add_excluded_patterns(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -393,7 +458,12 @@ def excluded_pattern_detail(request, pattern_id):
     pattern = get_object_or_404(ExcludedURLPattern, id=pattern_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(pattern.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access, OrganizationAccessError, ResourceNotInOrganizationError
+    try:
+        if pattern.org_id:
+            check_organization_access(request.user, pattern.org_id)
+    except (OrganizationAccessError, ResourceNotInOrganizationError) as e:
         return Response(
             {'error': 'Pattern not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -447,7 +517,12 @@ def toggle_excluded_pattern(request, pattern_id):
     pattern = get_object_or_404(ExcludedURLPattern, id=pattern_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(pattern.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access, OrganizationAccessError, ResourceNotInOrganizationError
+    try:
+        if pattern.org_id:
+            check_organization_access(request.user, pattern.org_id)
+    except (OrganizationAccessError, ResourceNotInOrganizationError) as e:
         return Response(
             {'error': 'Pattern not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -475,7 +550,12 @@ def test_excluded_pattern(request, pattern_id):
     pattern = get_object_or_404(ExcludedURLPattern, id=pattern_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(pattern.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access, OrganizationAccessError, ResourceNotInOrganizationError
+    try:
+        if pattern.org_id:
+            check_organization_access(request.user, pattern.org_id)
+    except (OrganizationAccessError, ResourceNotInOrganizationError) as e:
         return Response(
             {'error': 'Pattern not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -528,7 +608,11 @@ def apply_exclusions_now(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -570,7 +654,7 @@ def apply_exclusions_now(request, site_id):
             patterns_applied.append({
                 'pattern': pattern.pattern,
                 'pattern_type': pattern.pattern_type,
-                'error': str(e)
+                'error': 'An internal error occurred while processing this pattern.'
             })
 
     return Response({
@@ -598,7 +682,11 @@ def preview_exclusion_impact(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND
@@ -783,7 +871,11 @@ def apply_template(request, site_id):
     site = get_object_or_404(Site, id=site_id)
 
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except ResourceNotInOrganizationError:
         return Response(
             {'error': 'Site not found'},
             status=status.HTTP_404_NOT_FOUND

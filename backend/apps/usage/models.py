@@ -32,6 +32,8 @@ class UsageEvent(BaseModel):
             models.Index(fields=['org_id']),
             models.Index(fields=['type']),
             models.Index(fields=['occurred_at']),
+            # Composite index for optimized quota checking
+            models.Index(fields=['org_id', 'type', 'occurred_at'], name='usage_events_quota_idx'),
         ]
 
     def __str__(self):

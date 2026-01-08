@@ -101,15 +101,28 @@ class IndexingService:
         if callback_url is None:
             callback_url = self._build_callback_url()
 
-        job = IndexingJob.objects.create(
-            site_id=site.id,
-            org_id=getattr(site, 'org_id', None),
-            external_job_id=job_id,
-            url=request_url,
-            max_pages=max_pages,
-            target_namespace=target_namespace,
-            callback_url=callback_url  # Store for retries
-        )
+        # Race Condition Fix: Handle IntegrityError if job was created concurrently
+        try:
+            job = IndexingJob.objects.create(
+                site_id=site.id,
+                org_id=getattr(site, 'org_id', None),
+                external_job_id=job_id,
+                url=request_url,
+                max_pages=max_pages,
+                target_namespace=target_namespace,
+                callback_url=callback_url  # Store for retries
+            )
+        except Exception as e:
+            # Check for unique constraint violation (IntegrityError)
+            # We catch generic Exception and check string because importing IntegrityError 
+            # might be cleaner but this catches all DB unique violations.
+            if "unique constraint" in str(e).lower() or "integrityerror" in str(e).lower():
+                self.logger.info(f"Race condition caught: Job {job_id} created concurrently. Returning existing job.")
+                existing_job = IndexingJob.objects.filter(external_job_id=job_id).first()
+                if existing_job:
+                    return existing_job
+            # If it was a real error, re-raise
+            raise e
         
         # Call external indexing service AFTER transaction commits
         # This prevents the "Job not found" race condition where the external service 
@@ -297,6 +310,12 @@ class IndexingService:
         """Update job status from webhook with proper status handling"""
         try:
             job = IndexingJob.objects.get(external_job_id=job_id)
+            
+            # State Machine Guard: Prevent reverting from terminal states
+            if job.status in ['completed', 'cancelled', 'failed']:
+                self.logger.warning(f"Ignored status update to '{status}' for job {job.id} because it is already in terminal state '{job.status}'")
+                return job
+
             self.logger.info(f"Updating job {job.id} status from {job.status} to {status}")
 
             # Handle different status transitions according to API spec

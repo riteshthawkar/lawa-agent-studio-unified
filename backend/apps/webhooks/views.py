@@ -23,11 +23,11 @@ class WebhookViewSet(BaseViewSet):
         """Filter webhook events by organization"""
         queryset = super().get_queryset()
         request = self.request
+
+        from apps.core.organization_permissions import get_user_organizations
+        user_orgs = get_user_organizations(request.user)
         
-        if hasattr(request, 'org_id') and request.org_id:
-            return queryset.filter(org_id=request.org_id)
-        
-        return queryset.none()
+        return queryset.filter(org_id__in=user_orgs.values('id'))
 
 
 @api_view(['POST'])
@@ -259,11 +259,8 @@ def verify_webhook_signature(request):
 def audit_logs(request, org_id):
     """Get audit logs for organization"""
     # Verify organization access
-    if hasattr(request, 'org_id') and str(org_id) != str(request.org_id):
-        return Response(
-            {'error': 'Organization access denied'},
-            status=http_status.HTTP_403_FORBIDDEN
-        )
+    from apps.core.organization_permissions import check_organization_access
+    check_organization_access(request.user, org_id)
     
     logs = AuditLog.objects.filter(org_id=org_id).order_by('-created_at')[:100]
     
@@ -286,8 +283,12 @@ def retry_webhook(request, webhook_id):
         webhook = WebhookEvent.objects.get(id=webhook_id)
 
         # Check organization access
-        if hasattr(request, 'org_id') and str(webhook.org_id) != str(request.org_id):
-            return Response(
+        # Check organization access
+        from apps.core.organization_permissions import check_organization_access, OrganizationAccessError, ResourceNotInOrganizationError
+        try:
+            check_organization_access(request.user, webhook.org_id)
+        except (OrganizationAccessError, ResourceNotInOrganizationError) as e:
+             return Response(
                 {'error': 'Webhook not found'},
                 status=http_status.HTTP_404_NOT_FOUND
             )

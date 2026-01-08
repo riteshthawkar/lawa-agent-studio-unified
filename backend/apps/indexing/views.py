@@ -55,8 +55,11 @@ class IndexingJobViewSet(BaseViewSet):
         
         if hasattr(request, 'org_id') and request.org_id:
             return queryset.filter(org_id=request.org_id)
-        
-        return queryset.none()
+            
+        # Fallback to user organizations
+        from apps.core.organization_permissions import get_user_organizations
+        user_orgs = get_user_organizations(request.user)
+        return queryset.filter(org_id__in=user_orgs.values('id'))
 
     def create(self, request, *args, **kwargs):
         """Create new indexing job"""
@@ -68,8 +71,12 @@ class IndexingJobViewSet(BaseViewSet):
             )
         
         # Get site and validate access
-        site = get_object_or_404(Site, id=site_id)
-        if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+        
+        # Get site and validate access
+        from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+        try:
+            site = check_site_access(request.user, site_id)
+        except (ResourceNotInOrganizationError, Exception) as e:
             return Response(
                 {'error': 'Site not found'}, 
                 status=status.HTTP_404_NOT_FOUND
@@ -79,25 +86,19 @@ class IndexingJobViewSet(BaseViewSet):
         serializer.is_valid(raise_exception=True)
         
         # Create indexing job
+        # Create indexing job
         indexing_service = IndexingService()
-        try:
-            job = indexing_service.create_indexing_job(
-                site=site,
-                params=serializer.validated_data,
-                user_id=request.user.id,
-                callback_url=serializer.validated_data.get('callback_url')
-            )
-            
-            return Response(
-                IndexingJobSerializer(job).data,
-                status=status.HTTP_201_CREATED
-            )
-            
-        except Exception as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        job = indexing_service.create_indexing_job(
+            site=site,
+            params=serializer.validated_data,
+            user_id=request.user.id,
+            callback_url=serializer.validated_data.get('callback_url')
+        )
+        
+        return Response(
+            IndexingJobSerializer(job).data,
+            status=status.HTTP_201_CREATED
+        )
 
     @action(detail=True, methods=['post'])
     def retry(self, request, pk=None):
@@ -105,36 +106,36 @@ class IndexingJobViewSet(BaseViewSet):
         job = self.get_object()
         
         # Validate access
-        if hasattr(request, 'org_id') and str(job.org_id) != str(request.org_id):
+        
+        # Validate access
+        from apps.core.organization_permissions import check_organization_access, OrganizationAccessError
+        try:
+            if job.org_id:
+                check_organization_access(request.user, job.org_id)
+        except OrganizationAccessError:
              return Response(
                 {'error': 'Job not found'}, 
                 status=status.HTTP_404_NOT_FOUND
             )
             
         # Create new job with same params
+        # Create new job with same params
         indexing_service = IndexingService()
-        try:
-            new_job = indexing_service.create_indexing_job(
-                site=job.site,
-                params={
-                    'url': job.url,
-                    'max_pages': job.max_pages,
-                },
-                user_id=request.user.id,
-                callback_url=job.callback_url
-            )
-            
-            return Response({
-                'message': 'Job retry initiated',
-                'old_job_id': job.id,
-                'new_job_id': new_job.id
-            }, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        new_job = indexing_service.create_indexing_job(
+            site=job.site,
+            params={
+                'url': job.url,
+                'max_pages': job.max_pages,
+            },
+            user_id=request.user.id,
+            callback_url=job.callback_url
+        )
+        
+        return Response({
+            'message': 'Job retry initiated',
+            'old_job_id': job.id,
+            'new_job_id': new_job.id
+        }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -144,7 +145,11 @@ def site_indexing_jobs(request, site_id):
     site = get_object_or_404(Site, id=site_id)
     
     # Check organization access
-    if hasattr(request, 'org_id') and str(site.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_site_access, ResourceNotInOrganizationError
+    try:
+        check_site_access(request.user, site_id)
+    except (ResourceNotInOrganizationError, Exception) as e:
         return Response(
             {'error': 'Site not found'}, 
             status=status.HTTP_404_NOT_FOUND
@@ -168,7 +173,12 @@ def indexing_job_detail(request, job_id):
     job = get_object_or_404(IndexingJob, id=job_id)
     
     # Check organization access
-    if hasattr(request, 'org_id') and str(job.org_id) != str(request.org_id):
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access, OrganizationAccessError
+    try:
+        if job.org_id:
+            check_organization_access(request.user, job.org_id)
+    except OrganizationAccessError:
         return Response(
             {'error': 'Job not found'}, 
             status=status.HTTP_404_NOT_FOUND
@@ -313,59 +323,51 @@ def cancel_task(request, task_id):
     """
     POST /tasks/{task_id}/cancel/ — Cancel task according to API specification
     """
-    try:
-        # Get organization context for multi-tenancy validation
-        org_id = getattr(request, 'org_id', None)
-        
-        # Build queryset with organization filter
-        qs = IndexingJob.objects.all()
-        if org_id:
-            qs = qs.filter(org_id=org_id)
-        
-        # Try to find job by task_id first
-        job = qs.filter(task_id=task_id).first()
-        
-        # Fallback: Try by internal UUID
-        if not job:
-            try:
-                if len(task_id) == 36:
-                    job = qs.filter(id=task_id).first()
-            except (ValueError, TypeError):
-                pass
-        
-        # Fallback: Try by external job ID
-        if not job:
-            job = qs.filter(external_job_id=task_id).first()
-        
-        if not job:
-            return Response(
-                {'error': 'Task not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Check if task can be cancelled
-        cancellable_statuses = ['queued', 'processing', 'collecting_urls', 'processing_urls']
-        if job.status not in cancellable_statuses:
-            return Response(
-                {'error': f'Task cannot be cancelled (current status: {job.status})'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Cancel the task
-        job.mark_cancelled()
-        
-        return Response({
-            'message': f'Task {task_id} cancelled successfully',
-            'task_id': task_id,
-            'status': job.status
-        })
-        
-    except Exception as e:
-        logger.error(f"Error cancelling task {task_id}: {str(e)}", exc_info=True)
+    # Get organization context for multi-tenancy validation
+    org_id = getattr(request, 'org_id', None)
+    
+    # Build queryset with organization filter
+    qs = IndexingJob.objects.all()
+    if org_id:
+        qs = qs.filter(org_id=org_id)
+    
+    # Try to find job by task_id first
+    job = qs.filter(task_id=task_id).first()
+    
+    # Fallback: Try by internal UUID
+    if not job:
+        try:
+            if len(task_id) == 36:
+                job = qs.filter(id=task_id).first()
+        except (ValueError, TypeError):
+            pass
+    
+    # Fallback: Try by external job ID
+    if not job:
+        job = qs.filter(external_job_id=task_id).first()
+    
+    if not job:
         return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            {'error': 'Task not found'},
+            status=status.HTTP_404_NOT_FOUND
         )
+    
+    # Check if task can be cancelled
+    cancellable_statuses = ['queued', 'processing', 'collecting_urls', 'processing_urls']
+    if job.status not in cancellable_statuses:
+        return Response(
+            {'error': f'Task cannot be cancelled (current status: {job.status})'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Cancel the task
+    job.mark_cancelled()
+    
+    return Response({
+        'message': f'Task {task_id} cancelled successfully',
+        'task_id': task_id,
+        'status': job.status
+    })
 
 
 @api_view(['GET'])
@@ -438,123 +440,110 @@ def start_indexing(request):
     """
     logger = logging.getLogger(__name__)
     
+    logger = logging.getLogger(__name__)
+    
+    # Validate input data
+    serializer = IndexingJobCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        logger.warning(f"Invalid indexing request: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Get validated data
+    data = serializer.validated_data
+    
+    # Additional security validation
+    url = data.get('url', '')
+    if not url or len(url) > 2048:  # Prevent extremely long URLs
+        return Response(
+            {'error': 'Invalid URL length'}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validate URL format
+    url_validator = URLValidator()
     try:
-        # Validate input data
-        serializer = IndexingJobCreateSerializer(data=request.data)
-        if not serializer.is_valid():
-            logger.warning(f"Invalid indexing request: {serializer.errors}")
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        url_validator(url)
+    except ValidationError:
+        return Response(
+            {'error': 'Invalid URL format'}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
         
-        # Get validated data
-        data = serializer.validated_data
+    # Resolve Site from URL (Auto-create if doesn't exist for this endpoint)
+    try:
+        logger.debug(
+            "Indexing request received",
+            extra={
+                'payload': request.data,
+                'payload_type': type(request.data).__name__,
+                'user_id': str(request.user.id) if request.user.is_authenticated else None
+            }
+        )
+        domain = urlparse(url).netloc
+        # Remove port if present
+        if ':' in domain:
+            domain = domain.split(':')[0]
+            
+        # Get or create site
+        # Get organization context from middleware
+        org_id = getattr(request, 'org_id', None)
         
-        # Additional security validation
-        url = data.get('url', '')
-        if not url or len(url) > 2048:  # Prevent extremely long URLs
-            return Response(
-                {'error': 'Invalid URL length'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Simple get or create by domain
+        if org_id:
+            site = Site.objects.filter(domain=domain, org_id=org_id).first()
+        else:
+            site = Site.objects.filter(domain=domain).first()
         
-        # Validate URL format
-        url_validator = URLValidator()
-        try:
-            url_validator(url)
-        except ValidationError:
-            return Response(
-                {'error': 'Invalid URL format'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Resolve Site from URL (Auto-create if doesn't exist for this endpoint)
-        try:
-            logger.debug(
-                "Indexing request received",
-                extra={
-                    'payload': request.data,
-                    'payload_type': type(request.data).__name__,
-                    'user_id': str(request.user.id) if request.user.is_authenticated else None
-                }
-            )
-            domain = urlparse(url).netloc
-            # Remove port if present
-            if ':' in domain:
-                domain = domain.split(':')[0]
-                
-            # Get or create site
-            # Get organization context from middleware
-            org_id = getattr(request, 'org_id', None)
-            
-            # Simple get or create by domain
-            if org_id:
-                site = Site.objects.filter(domain=domain, org_id=org_id).first()
-            else:
-                site = Site.objects.filter(domain=domain).first()
-            
-            if not site:
-                # Create rudimentary site if missing
-                site = Site.objects.create(
-                    domain=domain,
-                    status='active',
-                    org_id=org_id
-                )
-                
-        except Exception as e:
-            if "duplicate key" in str(e):
-                logger.warning(f"Domain collision for {domain}: {e}")
-                return Response(
-                    {'error': 'Domain already registered by another organization'},
-                    status=status.HTTP_409_CONFLICT
-                )
-            logger.error(f"Error resolving site for URL {url}: {e}")
-            # Fallback to provided site_id if available, though likely to fail if URL parsing failed
-            if data.get('site_id'):
-                try:
-                    site = Site.objects.get(id=data['site_id'])
-                except Site.DoesNotExist:
-                     return Response({'error': 'Site lookup failed'}, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                return Response({'error': 'Could not resolve site from URL'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Use IndexingService to create job AND trigger worker
-        indexing_service = IndexingService()
-        try:
-            # Prepare params for service (using validated data + overrides)
-            job = indexing_service.create_indexing_job(
-                site=site,
-                params=data,
-                user_id=getattr(request.user, 'id', None), # Might be None for AllowAny
-                callback_url=data.get('callback_url')
-            )
-            
-
-            # Check if this was an idempotent return
-            message = 'Indexing task started successfully'
-            if job.created_at < timezone.now() - timedelta(seconds=5):
-                 # Heuristic: if job was created > 5s ago, it's likely an existing job
-                 message = 'Existing task returned (idempotent)'
-            
-            return Response({
-                'task_id': job.task_id or job.external_job_id,
-                'status': job.status,
-                'message': message,
-                'url': job.url,
-                'created_at': job.created_at.isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"Error starting indexing job: {str(e)}", exc_info=True)
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        if not site:
+            # Create rudimentary site if missing
+            site = Site.objects.create(
+                domain=domain,
+                status='active',
+                org_id=org_id
             )
             
     except Exception as e:
-        logger.error(f"Error processing indexing request: {str(e)}", exc_info=True)
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        if "duplicate key" in str(e):
+            logger.warning(f"Domain collision for {domain}: {e}")
+            return Response(
+                {'error': 'Domain already registered by another organization'},
+                status=status.HTTP_409_CONFLICT
+            )
+        logger.error(f"Error resolving site for URL {url}: {e}")
+        # Fallback to provided site_id if available, though likely to fail if URL parsing failed
+        if data.get('site_id'):
+            try:
+                site = Site.objects.get(id=data['site_id'])
+            except Site.DoesNotExist:
+                    return Response({'error': 'Site lookup failed'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({'error': 'Could not resolve site from URL'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Use IndexingService to create job AND trigger worker
+    indexing_service = IndexingService()
+    
+    # Prepare params for service (using validated data + overrides)
+    job = indexing_service.create_indexing_job(
+        site=site,
+        params=data,
+        user_id=getattr(request.user, 'id', None), # Might be None for AllowAny
+        callback_url=data.get('callback_url')
+    )
+    
+
+    # Check if this was an idempotent return
+    message = 'Indexing task started successfully'
+    if job.created_at < timezone.now() - timedelta(seconds=5):
+            # Heuristic: if job was created > 5s ago, it's likely an existing job
+            message = 'Existing task returned (idempotent)'
+    
+    return Response({
+        'task_id': job.task_id or job.external_job_id,
+        'status': job.status,
+        'message': message,
+        'url': job.url,
+        'created_at': job.created_at.isoformat()
+    })
 
 
 # Bug #26 fix: IndexedPage API endpoints for per-URL visibility
@@ -687,45 +676,44 @@ def add_indexed_page(request, site_id):
 
     url = serializer.validated_data['url']
 
-    try:
-        # Use atomic transaction to ensure Page and Job are created together
-        with transaction.atomic():
-            # Trigger immediate indexing job
-            indexing_service = IndexingService()
-            
-            # Create job first to get the ID
-            job = indexing_service.create_indexing_job(
-                site=site,
-                params={
-                    'url': url,
-                    'max_pages': 1,  # Index only this page
-                },
-                user_id=request.user.id
-            )
-
-            # Create or update the indexed page, linking it to the new job
-            page, created = IndexedPage.get_or_create_from_url(
-                site_id=site.id,
-                indexing_job_id=job.id,
-                url=url,
-                org_id=site.org_id,
-                user_added=True,
-                status='queued'  # Mark as queued since job is started
-            )
-
-            if not created:
-                # Ensure existing page is marked as user_added and queued
-                page.user_added = True
-                page.status = 'queued'
-                page.indexing_job_id = job.id
-                page.save(update_fields=['user_added', 'status', 'indexing_job_id', 'updated_at'])
-
-    except Exception as e:
-        logger.error(f"Failed to add indexed page: {str(e)}")
-        return Response(
-            {'error': 'Failed to initiate indexing'}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+    url = serializer.validated_data['url']
+    
+    # Use atomic transaction to ensure Page and Job are created together
+    with transaction.atomic():
+        # Trigger immediate indexing job
+        indexing_service = IndexingService()
+        
+        # Create job first to get the ID
+        job = indexing_service.create_indexing_job(
+            site=site,
+            params={
+                'url': url,
+                'max_pages': 1,  # Index only this page
+            },
+            user_id=request.user.id
         )
+        
+        # Create or update the indexed page, linking it to the new job
+        page, created = IndexedPage.get_or_create_from_url(
+            site_id=site.id,
+            indexing_job_id=job.id,
+            url=url,
+            org_id=site.org_id,
+            user_added=True,
+            status='queued'  # Mark as queued since job is started
+        )
+        
+        if not created:
+            # Ensure existing page is marked as user_added and queued
+            page.user_added = True
+            page.status = 'queued'
+            page.indexing_job_id = job.id
+            page.save(update_fields=['user_added', 'status', 'indexing_job_id', 'updated_at'])
+            
+    return Response(
+        IndexedPageSerializer(page).data,
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    )
 
     return Response(
         IndexedPageSerializer(page).data,

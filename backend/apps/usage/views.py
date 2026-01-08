@@ -28,10 +28,10 @@ class UsageViewSet(BaseViewSet):
         queryset = super().get_queryset()
         request = self.request
         
-        if hasattr(request, 'org_id') and request.org_id:
-            return queryset.filter(org_id=request.org_id)
-        
-        return queryset.none()
+        from apps.core.organization_permissions import get_user_organizations
+        user_orgs = get_user_organizations(request.user)
+
+        return queryset.filter(org_id__in=user_orgs.values('id'))
 
 
 @api_view(['GET'])
@@ -39,11 +39,9 @@ class UsageViewSet(BaseViewSet):
 def organization_usage(request, org_id):
     """Get organization usage for current period"""
     # Check organization access
-    if hasattr(request, 'org_id') and str(org_id) != str(request.org_id):
-        return Response(
-            {'error': 'Organization access denied'}, 
-            status=status.HTTP_403_FORBIDDEN
-        )
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access
+    check_organization_access(request.user, org_id)
     
     # Get current period (current month)
     current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -82,11 +80,9 @@ def organization_usage(request, org_id):
 def organization_quotas(request, org_id):
     """Get organization quotas"""
     # Check organization access
-    if hasattr(request, 'org_id') and str(org_id) != str(request.org_id):
-        return Response(
-            {'error': 'Organization access denied'}, 
-            status=status.HTTP_403_FORBIDDEN
-        )
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access
+    check_organization_access(request.user, org_id)
     
     try:
         quota = Quota.objects.filter(org_id=org_id).latest('created_at')
@@ -116,25 +112,20 @@ def organization_quotas(request, org_id):
 def create_quota(request, org_id):
     """Create or update organization quota"""
     # Check organization access
-    if hasattr(request, 'org_id') and str(org_id) != str(request.org_id):
-        return Response(
-            {'error': 'Organization access denied'}, 
-            status=status.HTTP_403_FORBIDDEN
-        )
+    # Check organization access
+    from apps.core.organization_permissions import check_organization_access
+    check_organization_access(request.user, org_id)
     
     # Check if user has admin/owner role
     from apps.organizations.models import Membership
-    try:
-        membership = Membership.objects.get(
-            user=request.user,
-            organization_id=org_id,
-            role__in=['owner', 'admin']
-        )
-    except Membership.DoesNotExist:
-        return Response(
-            {'error': 'Insufficient permissions'}, 
-            status=status.HTTP_403_FORBIDDEN
-        )
+    from rest_framework.exceptions import PermissionDenied
+
+    if not Membership.objects.filter(
+        user=request.user,
+        organization_id=org_id,
+        role__in=['owner', 'admin']
+    ).exists():
+        raise PermissionDenied('Insufficient permissions')
     
     serializer = QuotaSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
