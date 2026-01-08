@@ -304,6 +304,11 @@ class WebCrawler:
                     # Fallback: Just wait a small buffer time
                     await asyncio.sleep(1)
 
+                # Explicit delay if configured (Fix for slow loading SPAs)
+                if self.config.delay_before_return_html > 0:
+                    logger.debug(f"Waiting {self.config.delay_before_return_html}s before extracting content for {url}")
+                    await asyncio.sleep(self.config.delay_before_return_html)
+
                 html_content = await page.content()
                 soup = BeautifulSoup(html_content, 'html.parser')
 
