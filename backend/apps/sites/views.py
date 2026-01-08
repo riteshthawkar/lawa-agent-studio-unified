@@ -66,6 +66,11 @@ class SiteViewSet(BaseViewSet):
         """Create new site with auto-organization provisioning"""
         # Determine organization
         org_id = getattr(request, 'org_id', None)
+        logger.info(f"Site Create: Inferred org_id from request: {org_id}")
+        
+        # Log request data for debug
+        logger.info(f"Site Create: Request Data: {request.data}")
+        logger.info(f"Site Create: User: {request.user} (ID: {request.user.id})")
         
         from apps.core.organization_permissions import get_user_organizations
         from apps.organizations.models import Organization, Membership

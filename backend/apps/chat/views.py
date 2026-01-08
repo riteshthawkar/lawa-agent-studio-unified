@@ -45,7 +45,7 @@ class ChatSessionViewSet(BaseViewSet):
 
         # Filter sessions where the related site belongs to one of the user's organizations
         # This prevents leaking all sessions if org_id is missing from request
-        queryset = queryset.filter(site__org_id__in=user_orgs.values('id'))
+        queryset = self.queryset.filter(site__org_id__in=user_orgs.values('id'))
 
         # Order by most recent first
         return queryset.select_related('site', 'chatbot').order_by('-started_at')
