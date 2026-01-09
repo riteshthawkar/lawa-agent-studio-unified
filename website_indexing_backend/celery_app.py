@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Initialize Celery app
 # Broker URL from env or default to localhost
 broker_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("website_indexing", broker=broker_url)
+celery_app = Celery("website_indexing", broker=broker_url, include=['tasks'])
 
 # Configure Celery
 celery_app.conf.update(
