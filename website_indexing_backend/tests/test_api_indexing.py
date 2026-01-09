@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 @pytest.mark.asyncio
 async def test_start_indexing_no_auth(client: AsyncClient):
@@ -133,3 +134,33 @@ async def test_cancel_task_invalid_state(client: AsyncClient, mock_db_manager):
     
     response = await client.delete("/tasks/t1")
     assert response.status_code == 400
+
+@pytest.mark.asyncio
+async def test_start_indexing_celery_dispatch(client: AsyncClient, mock_db_manager, monkeypatch):
+    """Test dispatching to Celery when enabled"""
+    monkeypatch.setenv("USE_CELERY_WORKER", "true")
+    
+    # Mock tasks module
+    mock_tasks = MagicMock()
+    mock_task_func = MagicMock()
+    mock_tasks.index_site_task = mock_task_func
+    
+    with patch.dict("sys.modules", {"tasks": mock_tasks}):
+        headers = {"Authorization": "Bearer test-token"}
+        payload = {
+            "url": "https://example.com",
+            "max_pages": 50,
+            "external_job_id": "job-test-123"
+        }
+        
+        response = await client.post("/index", json=payload, headers=headers)
+        
+        assert response.status_code == 200
+        assert mock_task_func.delay.called
+        
+        # Verify call args
+        args, kwargs = mock_task_func.delay.call_args
+        assert kwargs["task_id"]
+        # Pydantic might add trailing slash
+        assert kwargs["crawler_config_dict"]["start_url"].rstrip("/") == "https://example.com"
+        assert kwargs["external_job_id"] == "job-test-123"

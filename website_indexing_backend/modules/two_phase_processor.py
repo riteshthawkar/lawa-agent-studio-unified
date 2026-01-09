@@ -291,6 +291,12 @@ class TwoPhaseProcessor:
                 logger.debug("Memory cleanup completed after two-phase processing")
             except Exception as cleanup_err:
                 logger.debug(f"Memory cleanup warning (non-critical): {cleanup_err}")
+            
+            # Cleanup executor pools in iterative processor
+            try:
+                await self.iterative_processor.close()
+            except Exception as pool_err:
+                logger.debug(f"Executor cleanup warning (non-critical): {pool_err}")
 
     def get_overall_stats(self) -> Dict[str, Any]:
         """Get overall processing statistics."""

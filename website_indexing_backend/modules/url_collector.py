@@ -97,7 +97,9 @@ class URLCollector:
                        f"remove_overlays={self.config.remove_overlay_elements}")
             start_time = time.time()
 
-            # Configure Deep Crawl Strategy
+            # Configure Deep Crawl Strategy with concurrency limit
+            # Default to 5 concurrent pages to prevent overwhelming target servers
+            max_concurrent_pages = int(os.getenv("CRAWLER_MAX_CONCURRENT_PAGES", "5"))
             deep_crawl_strategy = BFSDeepCrawlStrategy(
                 max_depth=3,  # Default depth, can be configurable
                 include_external=False,
@@ -110,7 +112,7 @@ class URLCollector:
             if self.config.infinite_scroll_enabled or self.config.lazy_load_images:
                 js_code = self._build_dynamic_content_js()
 
-            # Configure Crawler Run with enhanced scraping for dynamic content
+            # Configure Crawler Run with enhanced scraping and concurrency control
             run_config = CrawlerRunConfig(
                 deep_crawl_strategy=deep_crawl_strategy,
                 scraping_strategy=WebScrapingStrategy(),  # Use Pruning Strategy
@@ -126,6 +128,8 @@ class URLCollector:
                 js_code=js_code,
                 # Increase timeout for dynamic content loading
                 page_timeout=getattr(self.config, 'dynamic_content_wait', 5.0) * 1000 + 30000,
+                # Concurrency control - limit parallel page fetches
+                semaphore_count=max_concurrent_pages,
             )
 
             # Production Enhancement: Configure browser with stealth mode for better compatibility

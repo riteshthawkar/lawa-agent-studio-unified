@@ -14,6 +14,7 @@ import aiohttp
 import ssl
 from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable
 from pathlib import Path
+import fitz # PyMuPDF for quick page count check
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.content_scraping_strategy import WebScrapingStrategy  # Use Pruning Strategy for fresh fetches
@@ -21,7 +22,8 @@ from crawl4ai.content_scraping_strategy import WebScrapingStrategy  # Use Prunin
 from .embedder import DocumentEmbedder, GeminiDocumentEmbedder
 from .config import EmbeddingConfig, PreprocessorConfig, PDFConfig, ProcessingConfig
 from .content_preprocessor import ContentPreprocessor
-from .pdf_processor import PDFProcessor
+from .pdf_processor import PDFProcessor, worker_process_pdf_from_bytes
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from .pdf_downloader import PDFDownloader, PDFDownloadConfig, PDFDownloadResult
 
 logger = logging.getLogger(__name__)
@@ -130,6 +132,25 @@ class IterativeProcessor:
         # Memory management
         self.max_memory_mb = int(os.getenv("MAX_MEMORY_MB", "2048"))  # 2GB default
         self.memory_check_interval = 10  # Check every 10 URLs
+
+        # Process Pool for CPU-intensive PDF tasks
+        # Use roughly half of available CPUs to leave room for IO and other tasks
+        max_workers = max(1, (os.cpu_count() or 2) // 2)
+        self.process_pool = ProcessPoolExecutor(max_workers=max_workers)
+        logger.info(f"Initialized ProcessPoolExecutor with {max_workers} workers for PDF processing")
+        
+        # Thread Pool for CPU-bound but GIL-releasing tasks (like markdown splitting)
+        self.thread_pool = ThreadPoolExecutor(max_workers=4)
+        logger.info("Initialized ThreadPoolExecutor with 4 workers for chunking tasks")
+
+    async def close(self):
+        """Cleanup resources - shutdown executor pools."""
+        try:
+            self.process_pool.shutdown(wait=False)
+            self.thread_pool.shutdown(wait=False)
+            logger.info("Successfully shutdown ProcessPoolExecutor and ThreadPoolExecutor")
+        except Exception as e:
+            logger.warning(f"Error shutting down executors: {e}")
 
     def _extract_title_from_content(self, content: str, html_content: str = None) -> str:
         """Extract title from content.
@@ -352,16 +373,53 @@ class IterativeProcessor:
                 )
                 return None
 
-            # Process PDF to markdown using in-memory processing
-            # No disk storage required - PyMuPDF processes directly from bytes
-            # Smart auto-OCR: automatically extracts charts, infographics, and scanned pages
-            # when GEMINI_API_KEY is configured (no manual flag needed)
-            markdown_content = self.pdf_processor.process_pdf_from_bytes(
-                pdf_bytes=pdf_bytes,
-                source_url=url,
-                max_pages=self.pdf_config.max_pages,
-                auto_ocr=True  # Enable smart auto-detection (OCR for scanned pages + charts)
-            )
+            # Process PDF in CHUNKS to prevent blocking and memory spikes
+            # 1. Get total page count first (lightweight)
+            try:
+                doc_check = fitz.open(stream=pdf_bytes, filetype="pdf")
+                total_possible_pages = len(doc_check)
+                doc_check.close()
+            except Exception:
+                total_possible_pages = 100 # Fallback
+            
+            # 2. Determine processing limits
+            # If max_pages is None, process everything. Otherwise min(total, max_pages)
+            max_limit = self.pdf_config.max_pages if self.pdf_config.max_pages else total_possible_pages
+            final_end_page = min(total_possible_pages, max_limit)
+            
+            CHUNK_SIZE = 20
+            all_markdown_parts = []
+            
+            logger.info(f"Starting PDF processing for {url}: {final_end_page} pages in chunks of {CHUNK_SIZE}")
+
+            loop = asyncio.get_running_loop()
+            
+            for start_page in range(0, final_end_page, CHUNK_SIZE):
+                end_page = min(start_page + CHUNK_SIZE, final_end_page)
+                
+                logger.info(f"Processing PDF chunk {start_page}-{end_page} for {url}")
+                
+                # Submit chunk to worker process
+                chunk_markdown = await loop.run_in_executor(
+                    self.process_pool,
+                    worker_process_pdf_from_bytes,
+                    pdf_bytes,
+                    url,
+                    os.getenv("GEMINI_API_KEY"),
+                    start_page,  # start_page
+                    end_page,    # end_page
+                    1024,        # memory_limit_mb
+                    True         # auto_ocr
+                )
+                
+                if chunk_markdown:
+                    all_markdown_parts.append(chunk_markdown)
+                
+                # Yield control to event loop to allow other tasks (like heartbeats/status queries) to run
+                await asyncio.sleep(0.1)
+
+            # Join all parts
+            markdown_content = "\n\n".join(all_markdown_parts)
 
             # Free PDF bytes from memory after extraction
             del pdf_bytes

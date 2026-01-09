@@ -10,8 +10,8 @@ async def test_background_task_success(mock_db_manager):
     # Mock mocks
     mock_db_manager.claim_and_start_task.return_value = True
     
-    # Mock TwoPhaseProcessor
-    with patch("app.TwoPhaseProcessor") as MockProcessor:
+    # Mock TwoPhaseProcessor in the service module
+    with patch("modules.indexing_service.TwoPhaseProcessor") as MockProcessor:
         processor_instance = MockProcessor.return_value
         processor_instance.process_website = AsyncMock(return_value={
             "status": "completed",
@@ -49,7 +49,7 @@ async def test_background_task_failed_processing(mock_db_manager):
     """Test background task handling processor exceptions"""
     mock_db_manager.claim_and_start_task.return_value = True
     
-    with patch("app.TwoPhaseProcessor") as MockProcessor:
+    with patch("modules.indexing_service.TwoPhaseProcessor") as MockProcessor:
         processor_instance = MockProcessor.return_value
         processor_instance.process_website.side_effect = Exception("Processing Error")
         
@@ -73,7 +73,7 @@ async def test_background_task_zero_docs_failure(mock_db_manager):
     """Test that 0 indexed docs is treated as failure"""
     mock_db_manager.claim_and_start_task.return_value = True
     
-    with patch("app.TwoPhaseProcessor") as MockProcessor:
+    with patch("modules.indexing_service.TwoPhaseProcessor") as MockProcessor:
         processor_instance = MockProcessor.return_value
         processor_instance.process_website = AsyncMock(return_value={
             "status": "completed",

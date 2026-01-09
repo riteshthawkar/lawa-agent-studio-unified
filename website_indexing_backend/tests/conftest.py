@@ -8,6 +8,8 @@ from httpx import AsyncClient, ASGITransport
 
 # Add project root to path so we can import app
 sys.path.append(str(Path(__file__).parent.parent))
+# Add backend root to path so we can resolve lawa_platform imports
+sys.path.append(str(Path(__file__).parent.parent.parent / "backend"))
 
 # Mock the django_setup module BEFORE importing app
 # This prevents Django from trying to initialize during test collection

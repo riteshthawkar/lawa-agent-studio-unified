@@ -8,6 +8,7 @@ import json
 import uuid
 import hashlib
 import ssl
+import functools
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
@@ -16,6 +17,7 @@ import time
 import asyncio
 import aiohttp
 from aiolimiter import AsyncLimiter
+from concurrent.futures import ThreadPoolExecutor
 
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
@@ -49,6 +51,9 @@ class DocumentEmbedder:
             preserve_atomic_blocks=True,
             include_all_headings=True
         )
+        # ThreadPoolExecutor for non-blocking embedding generation
+        # Uses 4 workers to parallelize CPU-bound embedding work
+        self._thread_pool = ThreadPoolExecutor(max_workers=4)
         self._setup_models()
 
     def _setup_models(self):
@@ -186,9 +191,10 @@ class DocumentEmbedder:
             logger.error(f"Error truncating content: {e}")
             return content[:1000]  # Fallback to first 1000 chars
 
-    def _chunk_content_with_markdown_splitter(self, content: str, source_url: str) -> List[Dict[str, Any]]:
+    async def _chunk_content_with_markdown_splitter(self, content: str, source_url: str) -> List[Dict[str, Any]]:
         """
         Chunk content using MarkdownSplitter for better semantic chunking.
+        Offloaded to ThreadPoolExecutor to avoid blocking the event loop.
         
         Args:
             content (str): Content to chunk
@@ -198,8 +204,13 @@ class DocumentEmbedder:
             List[Dict]: List of chunk dictionaries with metadata
         """
         try:
-            # Use MarkdownSplitter for intelligent chunking
-            chunks = self.markdown_splitter.split_markdown(content)
+            # Offload CPU-bound splitting to ThreadPool (non-blocking)
+            loop = asyncio.get_event_loop()
+            chunks = await loop.run_in_executor(
+                self._thread_pool,
+                self.markdown_splitter.split_markdown,
+                content
+            )
             
             if not chunks:
                 logger.warning("MarkdownSplitter returned no chunks")
@@ -269,7 +280,7 @@ class DocumentEmbedder:
             logger.error(f"Error in fallback chunking: {e}")
             return []
 
-    def _process_content_for_pinecone(self, content: str, source_url: str) -> List[Dict[str, Any]]:
+    async def _process_content_for_pinecone(self, content: str, source_url: str) -> List[Dict[str, Any]]:
         """
         Process content to fit Pinecone constraints with intelligent chunking.
         
@@ -295,9 +306,9 @@ class DocumentEmbedder:
                     }
                 }]
             else:
-                # Content is too large, chunk it
+                # Content is too large, chunk it (async)
                 logger.info(f"Content exceeds size limit, chunking content from {source_url}")
-                return self._chunk_content_with_markdown_splitter(content, source_url)
+                return await self._chunk_content_with_markdown_splitter(content, source_url)
                 
         except Exception as e:
             logger.error(f"Error processing content for Pinecone: {e}")
@@ -557,8 +568,8 @@ class DocumentEmbedder:
                     text_content = doc["text"]
                     source_url = doc["metadata"].get("url", "")
                     
-                    # Process content for Pinecone (handles chunking if needed)
-                    processed_chunks = self._process_content_for_pinecone(text_content, source_url)
+                    # Process content for Pinecone (handles chunking if needed) - async
+                    processed_chunks = await self._process_content_for_pinecone(text_content, source_url)
                     all_processed_docs.extend(processed_chunks)
                     
                 except Exception as e:
@@ -591,26 +602,34 @@ class DocumentEmbedder:
                     batch_texts.append(text)
                 
                 # Process embeddings one document at a time to avoid MPS memory issues
+                # Now uses ThreadPoolExecutor to avoid blocking the event loop
                 logger.debug(f"Generating embeddings individually for batch {i//embedding_batch_size + 1}/{(len(all_processed_docs) + embedding_batch_size - 1)//embedding_batch_size}")
                 batch_embeddings = []
+                
+                loop = asyncio.get_event_loop()
                 
                 for idx, single_text in enumerate(batch_texts):
                     try:
                         logger.debug(f"Embedding document {idx + 1}/{len(batch_texts)} in current batch")
-                        single_embedding = self.embedding_model.encode([single_text], show_progress_bar=False)
+                        # Offload synchronous encoding to ThreadPoolExecutor (non-blocking)
+                        single_embedding = await loop.run_in_executor(
+                            self._thread_pool,
+                            functools.partial(self.embedding_model.encode, [single_text], show_progress_bar=False)
+                        )
                         batch_embeddings.append(single_embedding[0])
                         
-                        # Small delay to help with MPS memory cleanup
-                        if idx < len(batch_texts) - 1:  # Don't delay after the last item
-                            import time
-                            time.sleep(0.1)
+                        # Yield control to event loop between embeddings
+                        await asyncio.sleep(0.01)
                             
                     except Exception as embed_e:
                         logger.error(f"Error embedding single text {idx + 1}: {embed_e}")
                         # Create zero vector as fallback (get actual dimension from model)
                         try:
                             # Try to get dimension from a small test
-                            test_embedding = self.embedding_model.encode(["test"], show_progress_bar=False)
+                            test_embedding = await loop.run_in_executor(
+                                self._thread_pool,
+                                functools.partial(self.embedding_model.encode, ["test"], show_progress_bar=False)
+                            )
                             dimension = len(test_embedding[0])
                         except:
                             dimension = 384  # Common dimension fallback
@@ -928,7 +947,8 @@ class GeminiDocumentEmbedder:
     
     async def _get_gemini_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Get embeddings from Gemini API with retry logic.
+        Get embeddings from Gemini API with parallel execution and retry logic.
+        Uses asyncio.gather() for concurrent requests with rate limiting.
         """
         if not self.config.gemini_api_key:
             raise ValueError("GEMINI_API_KEY not found in configuration")
@@ -943,9 +963,6 @@ class GeminiDocumentEmbedder:
         output_dimensions = getattr(self.config, 'gemini_embedding_dimensions', 3072)
 
         # Create SSL context - configurable via environment variable
-        # Default: verify SSL certificates (secure)
-        # Create SSL context - configurable via environment variable
-        # Default: verify SSL certificates (secure)
         ssl_verify = os.getenv("GEMINI_SSL_VERIFY", "true").lower() == "true"
         if ssl_verify:
             try:
@@ -963,67 +980,91 @@ class GeminiDocumentEmbedder:
 
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         
-        embeddings = []
         max_retries = 3
         retry_delay = 1  # seconds
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            for text in texts:
-                # Apply rate limiting before each API call
-                async with self.rate_limiter:
-                    # Retry loop for each text
-                    for attempt in range(max_retries):
-                        try:
-                            content = {"parts": [{"text": text}]}
-
-                            # Include output_dimensionality to control embedding size
-                            payload = {
-                                "model": "models/gemini-embedding-001",
-                                "content": content,
-                                "output_dimensionality": output_dimensions
-                            }
-
-                            async with session.post(url, headers=headers, json=payload) as response:
-                                if response.status == 200:
-                                    result = await response.json()
-
-                                    # Handle single embedding response
-                                    if "embedding" in result:
-                                        embedding_data = result["embedding"]
-                                        if isinstance(embedding_data, dict) and "values" in embedding_data:
-                                            embeddings.append(embedding_data["values"])
-                                            break  # Success, break retry loop
-                                        else:
-                                            logger.error(f"Unexpected embedding structure: {embedding_data}")
-                                            # Non-retryable error if structure is wrong
+        async def embed_single_text(session: aiohttp.ClientSession, text: str, index: int) -> tuple:
+            """Embed a single text with rate limiting and retry logic."""
+            async with self.rate_limiter:
+                for attempt in range(max_retries):
+                    try:
+                        content = {"parts": [{"text": text}]}
+                        payload = {
+                            "model": "models/gemini-embedding-001",
+                            "content": content,
+                            "output_dimensionality": output_dimensions
+                        }
+                        
+                        async with session.post(url, headers=headers, json=payload) as response:
+                            if response.status == 200:
+                                result = await response.json()
+                                if "embedding" in result:
+                                    embedding_data = result["embedding"]
+                                    if isinstance(embedding_data, dict) and "values" in embedding_data:
+                                        return (index, embedding_data["values"], None)
                                     else:
-                                        logger.error(f"No embedding found in response: {result}")
-                                elif response.status in [429, 500, 503]:
-                                    # Retryable errors
-                                    if attempt < max_retries - 1:
-                                        logger.warning(f"Gemini API error {response.status}, retrying ({attempt+1}/{max_retries})...")
-                                        await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
-                                        continue
-                                    else:
-                                        error_text = await response.text()
-                                        logger.error(f"Gemini API failed after {max_retries} retries. Status: {response.status}, Error: {error_text}")
-                                        raise Exception(f"Gemini API error {response.status}: {error_text}")
+                                        return (index, None, f"Unexpected embedding structure: {embedding_data}")
                                 else:
-                                    # Non-retryable error
+                                    return (index, None, f"No embedding found in response: {result}")
+                            elif response.status in [429, 500, 503]:
+                                # Retryable errors
+                                if attempt < max_retries - 1:
+                                    logger.warning(f"Gemini API error {response.status} for text {index}, retrying ({attempt+1}/{max_retries})...")
+                                    await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+                                    continue
+                                else:
                                     error_text = await response.text()
-                                    logger.error(f"Gemini API error {response.status}: {error_text}")
-                                    raise Exception(f"Gemini API error {response.status}: {error_text}")
-
-                        except Exception as e:
-                            if attempt < max_retries - 1:
-                                logger.warning(f"Request failed: {e}, retrying ({attempt+1}/{max_retries})...")
-                                await asyncio.sleep(retry_delay * (2 ** attempt))
+                                    return (index, None, f"Gemini API failed after {max_retries} retries. Status: {response.status}")
                             else:
-                                logger.error(f"Request failed after {max_retries} retries: {e}")
-                                # Raising preserves existing behavior of failing the batch
-                                raise e
-
-        return embeddings
+                                # Non-retryable error
+                                error_text = await response.text()
+                                return (index, None, f"Gemini API error {response.status}: {error_text[:200]}")
+                    
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Request failed for text {index}: {e}, retrying ({attempt+1}/{max_retries})...")
+                            await asyncio.sleep(retry_delay * (2 ** attempt))
+                        else:
+                            return (index, None, f"Request failed after {max_retries} retries: {e}")
+                
+                return (index, None, "Max retries exceeded")
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            # Create tasks for all texts in parallel
+            tasks = [embed_single_text(session, text, i) for i, text in enumerate(texts)]
+            
+            # Execute all tasks concurrently with asyncio.gather()
+            logger.info(f"Sending {len(tasks)} parallel Gemini API embedding requests...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and maintain order
+            embeddings = [None] * len(texts)
+            errors = []
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    errors.append(str(result))
+                    continue
+                    
+                index, embedding, error = result
+                if embedding is not None:
+                    embeddings[index] = embedding
+                else:
+                    errors.append(f"Text {index}: {error}")
+            
+            # Log any errors but don't fail entire batch
+            if errors:
+                logger.warning(f"{len(errors)} embedding(s) failed: {errors[:3]}{'...' if len(errors) > 3 else ''}")
+            
+            # Filter out None values (failed embeddings)
+            successful_embeddings = [e for e in embeddings if e is not None]
+            
+            if len(successful_embeddings) < len(texts):
+                logger.warning(f"Only {len(successful_embeddings)}/{len(texts)} embeddings succeeded")
+            else:
+                logger.info(f"Successfully generated {len(successful_embeddings)} embeddings in parallel")
+            
+            return successful_embeddings
     
     def format_document_for_embedding(self, doc: Dict[str, Any]) -> str:
         """Format a document for embedding generation."""

@@ -25,11 +25,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: lawa-backend:latest
+    container_name: lawa-backend
     restart: always
     ports:
       - "8000:8000"
     volumes:
       - shared_data:/app/data # Shared data directory
+      # Mount source code for optional hot-reloading (remove in prod if prefer immutable)
+      - ./backend:/app
     depends_on:
       redis:
         condition: service_healthy
@@ -38,10 +41,10 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Use DB credentials from .env file (managed database)
-      - REDIS_URL=redis://redis:6379/0
+      # DB Credentials are read effectively from .env file now.
+      - REDIS_URL=redis://redis:6379/1
       - USE_REDIS=True
-      # Override localhost with container name for internal communication
+      # Internal service URLs
       - INDEXING_API_BASE=http://indexing-service:8080
       - CHATBOT_API_BASE=http://chatbot-service:8002
     command: gunicorn --bind 0.0.0.0:8000 --workers 3 lawa_platform.wsgi:application
@@ -51,16 +54,19 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: lawa-backend:latest
+    container_name: lawa-backend-worker
     restart: always
     volumes:
       - shared_data:/app/data
+      - ./backend:/app
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     env_file:
       - ./backend/.env
     environment:
-      # Use DB credentials from .env file (managed database)
-      - REDIS_URL=redis://redis:6379/0
+      # DB Credentials are read effectively from .env file now.
+      - REDIS_URL=redis://redis:6379/1
       - USE_REDIS=True
       - INDEXING_API_BASE=http://indexing-service:8080
     command: celery -A lawa_platform worker -l info
@@ -73,17 +79,49 @@ services:
       context: .
       dockerfile: website_indexing_backend/Dockerfile
     image: lawa-indexing-service:latest
+    container_name: lawa-indexing-service
     restart: always
     ports:
       - "8080:8080"
     volumes:
-      - shared_data:/app/data # Writes files here
+      - shared_data:/app/data
+      - ./website_indexing_backend:/app/website_indexing_backend
+      - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
     env_file:
       - ./website_indexing_backend/.env
     environment:
       - DATA_DIR=/app/data
-      # Use DB credentials from .env file (managed database)
-    command: python start_api.py --host 0.0.0.0 --port 8080
+      - REDIS_URL=redis://redis:6379/2
+      - USE_CELERY_WORKER=True
+      # DB Credentials are read effectively from .env file now.
+    command: uvicorn app:app --host 0.0.0.0 --port 8080 --workers 2
+
+  indexing-worker:
+    build:
+      context: .
+      dockerfile: website_indexing_backend/Dockerfile
+    image: lawa-indexing-service:latest
+    container_name: lawa-indexing-worker
+    restart: always
+    volumes:
+      - shared_data:/app/data
+      - ./website_indexing_backend:/app/website_indexing_backend
+      - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./website_indexing_backend/.env
+    environment:
+      - DATA_DIR=/app/data
+      - REDIS_URL=redis://redis:6379/2
+      - USE_CELERY_WORKER=True
+      - CELERY_WORKER_CONCURRENCY=5 # Optimized for 8GB RAM Droplet (5 workers * ~1GB + ~2GB Base System)
+      # DB Credentials are read effectively from .env file now.
+    command: celery -A celery_app worker -l info
 
   # ---------------------------------------------------------------------------
   # CHATBOT WIDGET BACKEND (Port 8002)
@@ -93,19 +131,23 @@ services:
       context: ./EMBEDDED_CHATBOT/backend
       dockerfile: Dockerfile
     image: lawa-chatbot-service:latest
+    container_name: lawa-chatbot-service
     restart: always
     ports:
       - "8002:8002"
     volumes:
       - shared_data:/app/data
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     env_file:
       - ./EMBEDDED_CHATBOT/backend/.env
     environment:
       - HOST=0.0.0.0
       - PORT=8002
-      # Use DB credentials from .env file (managed database)
+      # Use a separate Redis DB? Or just default. Assuming default /0 or shared env.
+      # If chatbot needs Redis, ensure URL is set. The previous file didn't set explicit REDIS_URL in env override.
+      - REDIS_URL=redis://redis:6379/0
     command: python main.py
 
 volumes:

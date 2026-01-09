@@ -50,61 +50,63 @@ class DjangoDatabaseManager:
                 raise
     
     async def create_task(self, task_data: Dict[str, Any]) -> str:
-        """Create a new indexing task using Django ORM."""
-        
-        @sync_to_async
-        def _create_job():
-            try:
-                # Convert site_id to UUID if it's a string
-                site_id = task_data.get("site_id")
-                if isinstance(site_id, str):
-                    import uuid as uuid_module
-                    try:
-                        site_id = uuid_module.UUID(site_id)
-                    except ValueError:
-                        # If not a valid UUID string, try to find the site by domain
-                        # Normalize domain format - ensure it has protocol
-                        domain_to_search = site_id
-                        if not domain_to_search.startswith(('http://', 'https://')):
-                            domain_to_search = f'https://{domain_to_search}'
-                        
-                        site = self.Site.objects.filter(domain=domain_to_search).first()
-                        if not site:
-                            # Also try without protocol
-                            site = self.Site.objects.filter(domain=site_id).first()
-                        
-                        if site:
+        """Create a new indexing task using Django Async ORM."""
+        try:
+            logger.info(f"Creating task with data: {task_data}")
+            
+            # Convert site_id to UUID if it's a string
+            site_id = task_data.get("site_id")
+            if isinstance(site_id, str):
+                import uuid as uuid_module
+                try:
+                    site_id = uuid_module.UUID(site_id)
+                except ValueError:
+                    # If not a valid UUID string, try to find the site by domain
+                    # Normalize domain format - ensure it has protocol
+                    domain_to_search = site_id
+                    if not domain_to_search.startswith(('http://', 'https://')):
+                        domain_to_search = f'https://{domain_to_search}'
+                    
+                    # Use async filtering
+                    site = await self.Site.objects.filter(domain=domain_to_search).afirst()
+                    if not site:
+                        # Also try without protocol
+                        site = await self.Site.objects.filter(domain=site_id).afirst()
+                    
+                    if site:
+                        site_id = site.id
+                    else:
+                        # Auto-create site if it doesn't exist (for testing)
+                        logger.info(f"Auto-creating site for domain: {domain_to_search}")
+                        try:
+                            site = await self.Site.objects.acreate(
+                                domain=domain_to_search,
+                                status='active'
+                            )
                             site_id = site.id
-                        else:
-                            # Auto-create site if it doesn't exist (for testing)
-                            logger.info(f"Auto-creating site for domain: {domain_to_search}")
+                            logger.info(f"Created new site: {site_id} for domain: {domain_to_search}")
+                        except Exception as create_err:
+                            logger.error(f"Failed to auto-create site: {create_err}")
+                            # Try with original domain format as fallback
                             try:
-                                site = self.Site.objects.create(
-                                    domain=domain_to_search,
+                                site = await self.Site.objects.acreate(
+                                    domain=site_id,
                                     status='active'
                                 )
                                 site_id = site.id
-                                logger.info(f"Created new site: {site_id} for domain: {domain_to_search}")
-                            except Exception as create_err:
-                                logger.error(f"Failed to auto-create site: {create_err}")
-                                # Try with original domain format as fallback
-                                try:
-                                    site = self.Site.objects.create(
-                                        domain=site_id,
-                                        status='active'
-                                    )
-                                    site_id = site.id
-                                    logger.info(f"Created new site with fallback domain format: {site_id}")
-                                except Exception as fallback_err:
-                                    logger.error(f"Fallback site creation also failed: {fallback_err}")
-                                    raise ValueError(f"Could not create or find site for domain: {site_id}")
-                
-                # Generate external_job_id if not provided
-                external_job_id = task_data.get("external_job_id")
-                if not external_job_id:
-                    external_job_id = f"auto_{task_data['task_id']}"
-                
-                job = self.IndexingJob.objects.create(
+                                logger.info(f"Created new site with fallback domain format: {site_id}")
+                            except Exception as fallback_err:
+                                logger.error(f"Fallback site creation also failed: {fallback_err}")
+                                raise ValueError(f"Could not create or find site for domain: {site_id}")
+            
+            # Generate external_job_id if not provided
+            external_job_id = task_data.get("external_job_id")
+            if not external_job_id:
+                external_job_id = f"auto_{task_data['task_id']}"
+            
+            # Use native acreate
+            try:
+                job = await self.IndexingJob.objects.acreate(
                     site_id=site_id,
                     external_job_id=external_job_id,
                     url=task_data["url"],
@@ -118,88 +120,78 @@ class DjangoDatabaseManager:
                     created_at=timezone.now(),
                     updated_at=timezone.now()
                 )
+                logger.info(f"Created task {job.task_id} in Django database")
                 return job.task_id
+                
             except Exception as e:
                 # Handle duplicate key errors
                 if "duplicate key" in str(e) and task_data.get("external_job_id"):
-                    existing_job = self.IndexingJob.objects.filter(
+                    existing_job = await self.IndexingJob.objects.filter(
                         external_job_id=task_data.get("external_job_id")
-                    ).order_by('-created_at').first()
+                    ).order_by('-created_at').afirst()
                     
                     if existing_job:
                         logger.info(f"Returning existing task {existing_job.task_id}")
                         return existing_job.task_id
                 raise
-        
-        try:
-            logger.info(f"Creating task with data: {task_data}")
-            task_id = await _create_job()
-            logger.info(f"Created task {task_id} in Django database")
-            return task_id
+                
         except Exception as e:
-            logger.error(f"Error creating task with Django ORM: {e}")
+            logger.error(f"Error creating task with Django Async ORM: {e}")
             raise
     
     async def update_task_id(self, external_job_id: str, new_task_id: str) -> bool:
         """Update task_id for an existing job (used when reclaiming stubs)."""
-        @sync_to_async
-        def _update_id():
-            try:
-                logger.info(f"DEBUG: update_task_id called for external_job_id={external_job_id}, new_task_id={new_task_id}")
-                count = self.IndexingJob.objects.filter(external_job_id=external_job_id).update(task_id=new_task_id)
-                logger.info(f"DEBUG: update_task_id result count: {count}")
-                return count > 0
-            except Exception as e:
-                logger.error(f"Error updating task_id: {e}")
-                return False
-        
-        return await _update_id()
+        try:
+            logger.info(f"DEBUG: update_task_id called for external_job_id={external_job_id}, new_task_id={new_task_id}")
+            # Use native aupdate
+            count = await self.IndexingJob.objects.filter(external_job_id=external_job_id).aupdate(task_id=new_task_id)
+            logger.info(f"DEBUG: update_task_id result count: {count}")
+            return count > 0
+        except Exception as e:
+            logger.error(f"Error updating task_id: {e}")
+            return False
 
     async def claim_and_start_task(self, task_id: str, external_job_id: Optional[str], start_time: datetime) -> bool:
         """
         Claim a task (set task_id if needed) and mark as processing.
         This is used by background workers to pick up tasks created by the main backend.
         """
-        @sync_to_async
-        def _claim():
-            try:
-                # Try to find by external_job_id first if available
-                job = None
-                if external_job_id:
-                    logger.info(f"DEBUG: claiming task by external_job_id: {external_job_id}")
-                    job = self.IndexingJob.objects.filter(external_job_id=external_job_id).order_by('-created_at').first()
-                
-                # Fallback to task_id
-                if not job:
-                    logger.info(f"DEBUG: claiming task by task_id: {task_id}")
-                    job = self.IndexingJob.objects.filter(task_id=task_id).first()
-                
-                if not job:
-                    logger.warning(f"DEBUG: Could not find job to claim! (ext: {external_job_id}, task: {task_id})")
-                    return False
-                
-                # Found job - update it
-                job.task_id = task_id  # Ensure task_id is set
-                job.status = 'processing'
-                job.started_at = timezone.make_aware(start_time) if start_time.tzinfo is None else start_time
-                job.updated_at = timezone.now()
-                job.save()
-                
-                logger.info(f"DEBUG: Successfully claimed and started task {job.task_id} (id: {job.id})")
-                
-                # Update Site status
-                site = self.Site.objects.filter(id=job.site_id).first()
-                if site and site.status != 'indexing':
-                    site.status = 'indexing'
-                    site.save(update_fields=['status'])
-                    logger.info(f"Updated site {site.domain} status to indexing")
-
-                return True
-            except Exception as e:
-                logger.error(f"Error claiming task: {e}")
+        try:
+            # Try to find by external_job_id first if available
+            job = None
+            if external_job_id:
+                logger.info(f"DEBUG: claiming task by external_job_id: {external_job_id}")
+                job = await self.IndexingJob.objects.filter(external_job_id=external_job_id).order_by('-created_at').afirst()
+            
+            # Fallback to task_id
+            if not job:
+                logger.info(f"DEBUG: claiming task by task_id: {task_id}")
+                job = await self.IndexingJob.objects.filter(task_id=task_id).afirst()
+            
+            if not job:
+                logger.warning(f"DEBUG: Could not find job to claim! (ext: {external_job_id}, task: {task_id})")
                 return False
-        
-        return await _claim()
+            
+            # Found job - update it
+            job.task_id = task_id  # Ensure task_id is set
+            job.status = 'processing'
+            job.started_at = timezone.make_aware(start_time) if start_time.tzinfo is None else start_time
+            job.updated_at = timezone.now()
+            await job.asave()
+            
+            logger.info(f"DEBUG: Successfully claimed and started task {job.task_id} (id: {job.id})")
+            
+            # Update Site status
+            site = await self.Site.objects.filter(id=job.site_id).afirst()
+            if site and site.status != 'indexing':
+                site.status = 'indexing'
+                await site.asave(update_fields=['status'])
+                logger.info(f"Updated site {site.domain} status to indexing")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error claiming task: {e}")
+            return False
 
     def _sanitize_for_json(self, value: Any) -> Any:
         """
@@ -235,10 +227,9 @@ class DjangoDatabaseManager:
             return str(value) if value else None
 
     async def update_task_status(self, task_id: str, status: str, **kwargs) -> bool:
-        """Update task status and optional fields using Django ORM."""
+        """Update task status and optional fields using Django Async ORM."""
 
-        @sync_to_async
-        def _update_job():
+        async def _update_job():
             update_fields = {'status': status, 'updated_at': timezone.now()}
 
             # Add optional fields and fix timezone issues
@@ -259,43 +250,41 @@ class DjangoDatabaseManager:
             try:
                 # We need to find the job first to get site_id
                 logger.info(f"DEBUG: update_task_status looking for task_id: {task_id} (type: {type(task_id)})")
-                job = self.IndexingJob.objects.filter(task_id=task_id).first()
+                job = await self.IndexingJob.objects.filter(task_id=task_id).afirst()
                 if not job:
                     logger.warning(f"DEBUG: Job not found! Checking all jobs with similar IDs...")
-                    all_jobs = self.IndexingJob.objects.all().values('task_id', 'id', 'external_job_id')
-                    logger.info(f"DEBUG: Available jobs: {list(all_jobs)}")
                     return False
 
                 # Apply updates to job
                 for k, v in update_fields.items():
                     setattr(job, k, v)
-                job.save() # Use save() to trigger signals if any (though we might be in separate process)
+                await job.asave()
                 
                 # Update Site status based on job status
-                site = self.Site.objects.filter(id=job.site_id).first()
+                site = await self.Site.objects.filter(id=job.site_id).afirst()
                 if site:
                     if status in ['processing', 'collecting_urls', 'processing_urls']:
                         if site.status != 'indexing':
                             site.status = 'indexing'
-                            site.save(update_fields=['status'])
+                            await site.asave(update_fields=['status'])
                             logger.info(f"Updated site {site.domain} status to indexing")
                     
                     elif status == 'completed':
                         site.status = 'active'
                         site.last_indexed_at = timezone.now()
-                        site.save(update_fields=['status', 'last_indexed_at'])
+                        await site.asave(update_fields=['status', 'last_indexed_at'])
                         logger.info(f"Updated site {site.domain} status to active and last_indexed_at")
 
                         # Store IndexedPage records from phase2_result.url_results
                         phase2 = update_fields.get('phase2_result') or {}
                         url_results = phase2.get('url_results', []) if isinstance(phase2, dict) else []
                         if url_results:
-                            self._store_indexed_pages_sync(job, url_results)
+                            await self._store_indexed_pages_async(job, url_results)
                         
                     elif status in ['failed', 'cancelled']:
                         # Revert to active so user can retry
                         site.status = 'active' 
-                        site.save(update_fields=['status'])
+                        await site.asave(update_fields=['status'])
                         logger.info(f"Updated site {site.domain} status to active (job failed/cancelled)")
                 
                 return True
@@ -442,11 +431,10 @@ class DjangoDatabaseManager:
             }
         }
     
-    def _store_indexed_pages_sync(self, job, url_results: List[Dict[str, Any]]) -> int:
+    async def _store_indexed_pages_async(self, job, url_results: List[Dict[str, Any]]) -> int:
         """
-        Store IndexedPage records from url_results.
-        This is a synchronous method called within _update_job.
-
+        Store IndexedPage records from url_results using Async ORM.
+        
         Args:
             job: The IndexingJob that produced these results
             url_results: List of URL result dictionaries from iterative_processor
@@ -484,9 +472,9 @@ class DjangoDatabaseManager:
                 }
                 page_status = status_map.get(status, 'indexed')
 
-                # Use update_or_create for upsert behavior
+                # Use aupdate_or_create for upsert behavior
                 now = timezone.now()
-                page, created = IndexedPage.objects.update_or_create(
+                page, created = await IndexedPage.objects.aupdate_or_create(
                     site_id=job.site_id,
                     url_hash=url_hash,
                     defaults={
@@ -503,10 +491,10 @@ class DjangoDatabaseManager:
                     }
                 )
                 
-                # Check discovered_at separately to avoid using 'created' before assignment
+                # Check discovered_at separately
                 if created or not page.discovered_at:
                     page.discovered_at = now
-                    page.save(update_fields=['discovered_at'])
+                    await page.asave(update_fields=['discovered_at'])
                 stored_count += 1
 
             except Exception as e:

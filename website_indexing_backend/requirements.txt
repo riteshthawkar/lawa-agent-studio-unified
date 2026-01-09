@@ -5,9 +5,7 @@ aiolimiter
 aiosignal
 aiosqlite
 alembic
-alphashape
 amqp
-annotated-doc
 annotated-types
 anyio
 asgiref
@@ -95,12 +93,10 @@ markitdown
 MarkupSafe
 mdurl
 mmh3
-mpmath
 multidict
 networkx
 nltk
 numpy
-onnxruntime
 openai
 openpyxl
 orjson
@@ -114,6 +110,7 @@ pinecone-plugin-interface
 pinecone-text
 playwright
 prompt_toolkit
+item
 propcache
 proto-plus
 protobuf
@@ -147,27 +144,18 @@ rpds-py
 rsa
 rtree
 safetensors
-scikit-learn
-scipy
-sentence-transformers
 setuptools
-shapely
 six
 sniffio
-snowballstemmer
 soupsieve
 SQLAlchemy
 sqlparse
 starlette
-sympy
 tenacity
 tf-playwright-stealth
 threadpoolctl
 tiktoken
-tokenizers
-torch
 tqdm
-transformers
 trimesh
 types-requests
 typing-inspection
@@ -187,3 +175,12 @@ Werkzeug
 xxhash
 yarl
 zipp
+
+# Removed heavy ML libraries:
+# torch
+# transformers
+# sentence-transformers
+# scipy
+# scikit-learn
+# sympy
+# nvidia-*

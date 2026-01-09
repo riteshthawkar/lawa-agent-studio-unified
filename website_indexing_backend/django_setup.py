@@ -16,6 +16,10 @@ def setup_django():
     backend_path = Path(__file__).parent.parent / "backend"
     sys.path.insert(0, str(backend_path))
     
+    # Ensure logs directory exists to prevent startup error
+    logs_dir = backend_path / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    
     # Set Django settings module
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lawa_platform.settings')
     

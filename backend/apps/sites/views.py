@@ -88,8 +88,8 @@ class SiteViewSet(BaseViewSet):
                 org_name = f"{user_email.split('@')[0]}'s Workspace"
                 
                 # Create slug from name
-                import slugify
-                base_slug = slugify.slugify(org_name)
+                from django.utils.text import slugify
+                base_slug = slugify(org_name)
                 slug = base_slug
                 counter = 1
                 while Organization.objects.filter(slug=slug).exists():

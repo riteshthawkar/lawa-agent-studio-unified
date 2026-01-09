@@ -117,7 +117,8 @@ class WebCrawler:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
             ]),
             viewport={"width": 1920, "height": 1080},
-            locale='en-US'
+            locale='en-US',
+            ignore_https_errors=True
         )
         
         # Block unnecessary resources
@@ -270,6 +271,43 @@ class WebCrawler:
 
         return results
 
+    async def smart_wait(self, page: Page, timeout: int = 10000):
+        """
+        Smart wait strategy that ensures the page is actually useful.
+        Waits for:
+        1. Network idle (short timeout, optional)
+        2. DOM content loaded
+        3. Presence of meaningful content (body with length > 0)
+        4. Stabilization (no DOM changes for a short period)
+        """
+        try:
+            # 1. Basic load states
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+            
+            # 2. Try network idle, but don't fail if it times out
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except PlaywrightTimeoutError:
+                pass
+
+            # 3. Wait for meaningful content (e.g. at least one paragraph or div)
+            try:
+                await page.wait_for_selector('body', timeout=timeout)
+                # Optional: wait for common text containers to ensure JS finished rendering
+                # await page.wait_for_selector('div, p, span, h1, h2', timeout=2000)
+            except PlaywrightTimeoutError:
+                pass
+
+            # 4. Explicit min wait from config (if set) to ensure animations/transitions finish
+            if self.config.delay_before_return_html > 0:
+                await asyncio.sleep(self.config.delay_before_return_html)
+            else:
+                # Default safety wait for SPAs
+                await asyncio.sleep(2.0)
+
+        except Exception as e:
+            logger.warning(f"Smart wait partial failure: {e}")
+
     async def handle_page(self, url: str) -> Optional[int]:
         """Process a single HTML page."""
         page: Optional[Page] = None
@@ -295,19 +333,8 @@ class WebCrawler:
                 # Handle dynamic content
                 await self.handle_dynamic_content(page)
 
-                # Wait for network to settle (Hybrid Wait Strategy)
-                # Try networkidle for SPA support, but don't fail if tracking pixels keep connection open
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5000)
-                except PlaywrightTimeoutError:
-                    logger.debug(f"Network idle timeout for {url} - proceeding with domcontentloaded")
-                    # Fallback: Just wait a small buffer time
-                    await asyncio.sleep(1)
-
-                # Explicit delay if configured (Fix for slow loading SPAs)
-                if self.config.delay_before_return_html > 0:
-                    logger.debug(f"Waiting {self.config.delay_before_return_html}s before extracting content for {url}")
-                    await asyncio.sleep(self.config.delay_before_return_html)
+                # Use Smart Wait Strategy
+                await self.smart_wait(page)
 
                 html_content = await page.content()
                 soup = BeautifulSoup(html_content, 'html.parser')
@@ -345,7 +372,14 @@ class WebCrawler:
                     self.url_mapping[str(final_url)] = output_file
 
                 # Extract and enqueue links
-                await self.enqueue_links_from_page(page, final_url)
+                link_count = await self.enqueue_links_from_page(page, final_url)
+                
+                # RETRY LOGIC: If 0 links found on a likely hub page, wait longer and retry once
+                if link_count == 0 and len(html_content) > 1000:
+                    logger.info(f"0 links found on {url}, retrying with longer wait...")
+                    await asyncio.sleep(3.0) # Extra wait
+                    link_count = await self.enqueue_links_from_page(page, final_url)
+                    logger.info(f"Retry result for {url}: found {link_count} links")
 
             return status
 
@@ -357,22 +391,45 @@ class WebCrawler:
                 await page.close()
             self.visited.add(str(url))
 
-    async def enqueue_links_from_page(self, page: Page, current_url: str):
-        """Extract and enqueue links from a page."""
-        links = await page.evaluate('''
-            () => {
-                const results = [];
-                document.querySelectorAll('a[href]').forEach(a => {
-                    if (a.href) results.push(a.href);
-                });
-                return [...new Set(results)];
-            }
-        ''')
-        
-        for link in links:
-            abs_url = urljoin(current_url, link)
-            if self.should_enqueue_url(abs_url) and len(self.visited) < self.config.max_pages:
-                self.to_visit.append(abs_url)
+    async def enqueue_links_from_page(self, page: Page, current_url: str) -> int:
+        """Extract and enqueue links from a page. Returns count of valid links found."""
+        try:
+            links = await page.evaluate('''
+                () => {
+                    const results = new Set();
+                    
+                    function collectLinks(root) {
+                        // Standard links
+                        root.querySelectorAll('a[href]').forEach(a => {
+                            if (a.href) results.add(a.href);
+                        });
+                        
+                        // Traverse Shadow DOMs
+                        root.querySelectorAll('*').forEach(el => {
+                            if (el.shadowRoot) {
+                                collectLinks(el.shadowRoot);
+                            }
+                        });
+                    }
+                    
+                    collectLinks(document);
+                    
+                    return [...results];
+                }
+            ''')
+            
+            valid_links_count = 0
+            for link in links:
+                abs_url = urljoin(current_url, link)
+                if self.should_enqueue_url(abs_url) and len(self.visited) < self.config.max_pages:
+                    self.to_visit.append(abs_url)
+                    valid_links_count += 1
+            
+            return valid_links_count
+            
+        except Exception as e:
+            logger.warning(f"Error extracting links from {current_url}: {e}")
+            return 0
 
     async def run(self):
         """Main crawling loop."""
