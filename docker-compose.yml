@@ -122,6 +122,11 @@ services:
       - CELERY_WORKER_CONCURRENCY=5 # Optimized for 8GB RAM Droplet (5 workers * ~1GB + ~2GB Base System)
       # DB Credentials are read effectively from .env file now.
     command: celery -A celery_app worker -l info
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A celery_app inspect ping -d celery@$HOSTNAME" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ---------------------------------------------------------------------------
   # CHATBOT WIDGET BACKEND (Port 8002)
