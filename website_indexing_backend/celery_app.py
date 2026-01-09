@@ -2,6 +2,15 @@
 import os
 import logging
 from celery import Celery
+import sys
+from pathlib import Path
+
+# Add backend to path immediately to allow Django settings to load
+# This matches the volume mount /app/backend in Docker
+backend_path = Path(__file__).resolve().parent.parent / "backend"
+if str(backend_path) not in sys.path:
+    sys.path.insert(0, str(backend_path))
+
 from celery.signals import worker_process_init
 from dotenv import load_dotenv
 
