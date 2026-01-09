@@ -1,129 +1,204 @@
 # Lawa AI Platform - System Architecture
 
-## 1. High-Level Overview
+## 1. High-Level System Architecture
 
-The Lawa AI Platform is built on a **Microservices-oriented Architecture**, deployed via Docker Compose on a single DigitalOcean Droplet. It consists of three main backend services orchestrating User Management, Website Indexing, and RAG (Retrieval-Augmented Generation) Chat.
+The Lawa AI Platform uses a **Microservices-oriented Architecture** deployed on a single DigitalOcean Droplet using Docker Compose. It orchestrates three main functional areas: **Management** (Django), **Indexing** (FastAPI+Celery), and **Inference** (FastAPI).
 
-### System Components
+### System Container Diagram
 
-| Service | Technology | Port | Role |
-| :--- | :--- | :--- | :--- |
-| **Core Backend** | Django / DRF | `8000` | User management, Project configuration, Orchestration, Billing. |
-| **Indexing Engine** | FastAPI + Celery | `8080` | High-performance website crawling, scraping, and vector embedding. |
-| **Chatbot API** | FastAPI | `8002` | Low-latency chat widget backend handling RAG and LLM inference. |
-| **Database** | PostgreSQL 15 | `5432` | **Managed (DO)**. Shared relational data (Users, Projects, Chat Logs). |
-| **Queue** | Redis 7 | `6379` | Message broker for Celery and caching. |
-| **Vector DB** | Pinecone | N/A | External SaaS storage for vector embeddings. |
+```mermaid
+C4Context
+    title System Container Diagram (Lawa AI Platform)
+
+    Person(user, "User", "Platform Administrator or Dashboard User")
+    Person(visitor, "Website Visitor", "End-user chatting with the widget")
+
+    System_Boundary(lawa_platform, "Lawa AI Platform (Single Droplet)") {
+        
+        Container(nginx, "Nginx / Load Balancer", "Reverse Proxy", "Routes traffic to appropriate services")
+        
+        System_Boundary(backend_services, "Backend Services") {
+            Container(django, "Core Backend", "Django", "User mgmt, Orchestration, Billing (Port 8000)")
+            Container(indexing_api, "Indexing API", "FastAPI", "Receives crawl requests, manages queue (Port 8080)")
+            Container(chatbot_api, "Chatbot API", "FastAPI", "RAG Inference, Chat History (Port 8002)")
+        }
+
+        System_Boundary(workers, "Async Workers") {
+            Container(django_worker, "Django Worker", "Celery", "Emailing, periodic tasks")
+            Container(indexing_worker, "Indexing Worker", "Celery", "Headed Browsers (Playwright), Scraping, Embedding")
+        }
+
+        System_Boundary(data, "Data Persistence") {
+            ContainerDb(redis, "Redis", "Redis 7", "Message Broker & Cache (Port 6379)")
+            ContainerDb(postgres, "PostgreSQL", "PostgreSQL 15 (Managed)", "Relational Data (Users, Projects, Logs)")
+        }
+    }
+
+    System_Ext(pinecone, "Pinecone", "Vector Database (SaaS)")
+    System_Ext(llm, "LLM Provider", "OpenAI / Gemini API")
+
+    Rel(user, django, "Configures Projects", "HTTPS/JSON")
+    Rel(visitor, chatbot_api, "Sends Messages", "HTTPS/JSON")
+    
+    Rel(django, postgres, "Reads/Writes User Data", "SQL")
+    Rel(django, redis, "Queues Tasks (DB 1)", "Redis Protocol")
+    Rel(django, indexing_api, "Triggers Indexing", "HTTP/Internal")
+    
+    Rel(indexing_api, redis, "Queues Crawl Tasks (DB 2)", "Redis Protocol")
+    Rel(indexing_worker, redis, "Consumes Tasks", "Redis Protocol")
+    Rel(indexing_worker, pinecone, "Upserts Vectors", "HTTPS")
+    Rel(indexing_worker, django, "Webhooks Progress", "HTTP/Internal")
+
+    Rel(chatbot_api, pinecone, "Semantic Search", "HTTPS")
+    Rel(chatbot_api, llm, "Generates Answers", "HTTPS")
+    Rel(chatbot_api, postgres, "Logs Chat History", "SQL")
+```
 
 ---
 
 ## 2. Infrastructure & Deployment
 
-The system is containerized and managed via a unified `docker-compose.yml` in the project root.
+The system is unified under a single `docker-compose.yml`.
 
 ### Network Topology
-*   **Docker Network (`lawa-network`)**: All internal communication happens over this private bridge network.
-*   **Service Discovery**: Containers access each other via hostname (e.g., `http://indexing-service:8080`).
-*   **Data Persistence**:
-    *   **Postgres**: Managed externally (DigitalOcean Managed DB).
-    *   **Redis**: Local container with volume persistence.
-    *   **Shared Data**: `shared_data` volume for passing temporary files if strictly necessary (though mostly API-driven).
-
-### Service Configuration
-*   **Django (`backend`)**:
-    *   Runs via `gunicorn`.
-    *   Connects to Redis DB `1`.
-    *   Exposes API for Frontend Board/Dashboard.
-*   **Indexing (`indexing-service`)**:
-    *   Runs via `uvicorn`.
-    *   Connects to Redis DB `2` (isolated queue).
-    *   Background Workers: Scalable `celery` workers running **Playwright** browsers.
-*   **Chatbot (`chatbot-service`)**:
-    *   Runs via `python main.py` (Uvicorn).
-    *   Optimized for read-heavy RAG operations.
+*   **Docker Network (`lawa-network`)**: Private bridge network.
+*   **Service Discovery**: `http://indexing-service:8080`, `http://chatbot-service:8002`.
+*   **Peristence**:
+    *   **Postgres**: External Managed DB.
+    *   **Redis**: Local Container.
 
 ---
 
-## 3. Workflows & Data Application
+## 3. Data Architecture (ER Diagram)
 
-### A. Website Indexing Workflow
-This flow describes how a user requests a website index and how the system processes it.
+This diagram highlights the key relationships between Projects, Indexing Jobs, and Chat Sessions.
+
+```mermaid
+erDiagram
+    User ||--o{ Project : owns
+    Project ||--o{ ChatBot : has
+    Project ||--o{ IndexingJob : initiates
+    
+    IndexingJob ||--o{ CrawledPage : processes
+    
+    ChatBot ||--o{ ChatSession : manages
+    ChatSession ||--o{ ChatMessage : contains
+    
+    Project {
+        uuid id PK
+        string name
+        string api_key
+    }
+
+    IndexingJob {
+        uuid id PK
+        string status "PENDING|PROCESSING|COMPLETED"
+        string url
+        int pages_crawled
+    }
+
+    ChatSession {
+        string session_id PK
+        timestamp created_at
+        string visitor_id
+    }
+
+    ChatMessage {
+        int id PK
+        string sender "USER|BOT"
+        text content
+        json source_citations
+        timestamp timestamp
+    }
+```
+
+---
+
+## 4. Workflows & Data Application
+
+### A. Website Indexing Workflow (Parallel Processing)
+
+This flow details how a URL is turned into vector embeddings.
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant User as User/Frontend
-    participant Django as Django Core (8000)
-    participant IndexAPI as Indexing API (8080)
+    participant Django as Django Core
+    participant IndexAPI as Indexing API
     participant Redis as Redis Queue
-    participant Worker as Indexing Worker
-    participant Pinecone as Pinecone DB
+    participant Worker as Celery Worker
+    participant Embed as Gemini/OpenAI
+    participant Pinecone as Pinecone
     participant DB as Postgres DB
 
-    User->>Django: POST /api/projects/{id}/index/ (URL, Depth)
-    Django->>DB: Create IndexingJob (Status: PENDING)
-    Django->>IndexAPI: POST /index/start_job (Webhook URL included)
-    IndexAPI->>Redis: Push Task (index_site_task)
-    IndexAPI-->>Django: 200 OK (Task ID)
+    note over User, Django: Phase 1: Submission
+    User->>Django: POST /api/projects/{id}/index/ (URL)
+    Django->>DB: Create Job (PENDING)
+    Django->>IndexAPI: POST /index/start_job
+    IndexAPI->>Redis: LPUSH task_queue
+    IndexAPI-->>Django: 200 OK (Task Queued)
+    Django-->>User: 202 Accepted (Job ID)
+
+    note over Worker, Pinecone: Phase 2: Execution (Async)
+    Worker->>Redis: BRPOP task_queue
+    Worker->>Worker: Launch Playwright
     
-    loop Background Processing
-        Worker->>Redis: Pop Task
-        Worker->>Worker: Init Crawler (Playwright)
-        Worker->>Worker: Crawl & Scrape Pages
-        Worker->>Worker: Generate Embeddings (Gemini/OpenAI)
+    loop Every Page
+        Worker->>Worker: Navigate & Scrape Content
+        Worker->>Embed: Generate Embeddings
+        Embed-->>Worker: Vector List
         Worker->>Pinecone: Upsert Vectors
-        Worker->>Django: POST /api/webhook/progress (Progress Update)
-        Django->>DB: Update IndexingJob (Status: PROCESSING)
     end
 
-    Worker->>Django: POST /api/webhook/complete
-    Django->>DB: Update IndexingJob (Status: COMPLETED)
+    note over Worker, Django: Phase 3: Reporting
+    Worker->>Django: Webhook: Progress Update (50%)
+    Django->>DB: Update Job (PROCESSING)
+    
+    Worker->>Django: Webhook: Job Complete
+    Django->>DB: Update Job (COMPLETED)
 ```
 
-### B. Chat Workflow (RAG)
-This flow handles the end-user chatting with the embedded widget.
+### B. RAG Chat Workflow (Retrieval Augmented Generation)
+
+This flow handles the real-time chat response generation.
 
 ```mermaid
-graph LR
-    User[Visitor] -- "Message" --> Widget[Chat Widget]
-    Widget -- "POST /chat" --> ChatAPI[Chatbot API (8002)]
+flowchart TD
+    A[User Message] --> B(Chatbot API)
+    B --> C{History Exists?}
+    C -- Yes --> D[Load Chat History from DB]
+    C -- No --> E[Create New Session]
+    D --> F[Generate Query Embedding]
+    E --> F
     
-    subgraph "RAG Pipeline"
-        ChatAPI -- "Query -> Vector" --> Embed[Embedding Model]
-        Embed --> ChatAPI
-        ChatAPI -- "Similarity Search" --> Pinecone[(Pinecone)]
-        Pinecone -- "Retrieved Context" --> ChatAPI
-        ChatAPI -- "Context + Query" --> LLM[LLM (OpenAI/Gemini)]
-        LLM -- "Generated Answer" --> ChatAPI
-    end
+    F --> G[Pinecone Vector Search]
+    G --> H[Retrieve Top-K Context Chunks]
     
-    ChatAPI -- "Save Log" --> DB[(Postgres)]
-    ChatAPI -- "Response" --> Widget
+    H --> I[Construct LLM Prompt]
+    I --> J[System Prompt + Context + History + User Query]
+    
+    J --> K[Call LLM (OpenAI/Gemini)]
+    K --> L[Generate Response]
+    
+    L --> M[Save Message to DB]
+    M --> N[Return Response to User]
 ```
 
 ---
 
-## 4. Key Integration Points
+## 5. Key Integration Points
 
 ### 1. Authentication
 *   **Django**: Uses JWT (SimpleJWT) for Dashboard access.
 *   **Inter-Service**: Services use **API Tokens** (defined in `.env` as `INDEXING_API_TOKEN`, etc.) to trust requests between Django and Indexing API.
 
 ### 2. State Management
-*   **Indexing State**: Maintained in Postgres (`IndexingJob` table). The Indexing Service is stateless regarding job history; it only executes what it's told and reports back.
-*   **Chat History**: Stored in Postgres (`ChatMessage` table) associated with the `SessionID`.
+*   **Indexing State**: Maintained in Postgres (`IndexingJob` table).
+*   **Chat History**: Stored in Postgres (`ChatMessage` table).
 
 ### 3. Scalability
-*   The **Indexing Worker** is decoupled from the API. We can scale `celery-worker` instances horizontally (`docker-compose up -d --scale indexing-worker=3`) to handle higher crawling throughput without affecting API responsiveness.
-
----
-
-## 5. Development to Production
-
-### Local Development
-*   Uses `docker-compose.yml`.
-*   `.env` files usually point to local dev services or sandbox credentials.
-
-### Production (DigitalOcean)
-*   **Database**: Switch to Managed Database User/Host in `.env`.
-*   **Redis**: Remains containerized (single node is sufficient for current scale).
-*   **Secrets**: `SECRET_KEY`, `API_KEY`s must be secured in `.env` (not committed).
+*   The **Indexing Worker** is decoupled from the API. Scale workers horizontally:
+    ```bash
+    docker-compose up -d --scale indexing-worker=3
+    ```

@@ -19,7 +19,11 @@ import aiohttp
 from aiolimiter import AsyncLimiter
 from concurrent.futures import ThreadPoolExecutor
 
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+    logging.warning("sentence-transformers not found. Local embeddings will not work.")
 from pinecone import Pinecone
 from pinecone_text.sparse import BM25Encoder
 
