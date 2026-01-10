@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, close_old_connections, connection
 from django.db.models import Q, Count
 from asgiref.sync import sync_to_async
 
@@ -24,6 +24,22 @@ IndexedPage = models.get('IndexedPage')  # May not exist in older migrations
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+def ensure_db_connection():
+    """Ensure database connection is fresh before each query.
+    
+    This is critical for long-running async processes where connections
+    can time out or be closed by the database server.
+    """
+    close_old_connections()
+    # Ensure connection is usable
+    try:
+        connection.ensure_connection()
+    except Exception as e:
+        logger.warning(f"Connection ensure failed, will retry: {e}")
+        close_old_connections()
+
 
 class DjangoDatabaseManager:
     """Database manager using Django ORM for unified data access."""
@@ -52,6 +68,8 @@ class DjangoDatabaseManager:
     async def create_task(self, task_data: Dict[str, Any]) -> str:
         """Create a new indexing task using Django Async ORM."""
         try:
+            # Ensure fresh DB connection
+            await sync_to_async(ensure_db_connection)()
             logger.info(f"Creating task with data: {task_data}")
             
             # Convert site_id to UUID if it's a string
@@ -142,6 +160,8 @@ class DjangoDatabaseManager:
     async def update_task_id(self, external_job_id: str, new_task_id: str) -> bool:
         """Update task_id for an existing job (used when reclaiming stubs)."""
         try:
+            # Ensure fresh DB connection
+            await sync_to_async(ensure_db_connection)()
             logger.info(f"DEBUG: update_task_id called for external_job_id={external_job_id}, new_task_id={new_task_id}")
             # Use native aupdate
             count = await self.IndexingJob.objects.filter(external_job_id=external_job_id).aupdate(task_id=new_task_id)
@@ -157,6 +177,9 @@ class DjangoDatabaseManager:
         This is used by background workers to pick up tasks created by the main backend.
         """
         try:
+            # Ensure fresh DB connection
+            await sync_to_async(ensure_db_connection)()
+            
             # Try to find by external_job_id first if available
             job = None
             if external_job_id:
@@ -228,6 +251,8 @@ class DjangoDatabaseManager:
 
     async def update_task_status(self, task_id: str, status: str, **kwargs) -> bool:
         """Update task status and optional fields using Django Async ORM."""
+        # Ensure fresh DB connection
+        await sync_to_async(ensure_db_connection)()
 
         async def _update_job():
             update_fields = {'status': status, 'updated_at': timezone.now()}
@@ -327,6 +352,7 @@ class DjangoDatabaseManager:
         @sync_to_async
         def _get_job():
             try:
+                ensure_db_connection()
                 job = self.IndexingJob.objects.filter(task_id=task_id).first()
                 return self._job_to_dict(job) if job else None
             except Exception as e:
@@ -341,6 +367,7 @@ class DjangoDatabaseManager:
         @sync_to_async
         def _get_job():
             try:
+                ensure_db_connection()
                 job = self.IndexingJob.objects.filter(
                     external_job_id=external_job_id
                 ).order_by('-created_at').first()
