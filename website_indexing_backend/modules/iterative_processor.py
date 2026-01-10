@@ -133,22 +133,26 @@ class IterativeProcessor:
         self.max_memory_mb = int(os.getenv("MAX_MEMORY_MB", "2048"))  # 2GB default
         self.memory_check_interval = 10  # Check every 10 URLs
 
-        # Process Pool for CPU-intensive PDF tasks
-        # Use roughly half of available CPUs to leave room for IO and other tasks
+        # Process Pool for CPU-intensive PDF tasks - DISABLED in daemon processes (Celery workers)
+        # Celery workers are daemon processes and cannot spawn sub-processes (ProcessPoolExecutor)
+        # This causes: "daemonic processes are not allowed to have children"
+        # Solution: Use ThreadPoolExecutor for PDF processing instead
+        # Note: PyMuPDF releases the GIL during PDF operations, so threading is still efficient
         max_workers = max(1, (os.cpu_count() or 2) // 2)
-        self.process_pool = ProcessPoolExecutor(max_workers=max_workers)
-        logger.info(f"Initialized ProcessPoolExecutor with {max_workers} workers for PDF processing")
+        # self.process_pool = ProcessPoolExecutor(max_workers=max_workers)  # Disabled - can't use in Celery
+        self.process_pool = None  # Disabled for Celery compatibility
+        logger.info(f"ProcessPoolExecutor disabled for Celery compatibility (daemon process limitation)")
         
-        # Thread Pool for CPU-bound but GIL-releasing tasks (like markdown splitting)
-        self.thread_pool = ThreadPoolExecutor(max_workers=4)
-        logger.info("Initialized ThreadPoolExecutor with 4 workers for chunking tasks")
+        # Thread Pool for CPU-bound but GIL-releasing tasks (like markdown splitting AND PDF processing)
+        self.thread_pool = ThreadPoolExecutor(max_workers=max_workers + 4)
+        logger.info(f"Initialized ThreadPoolExecutor with {max_workers + 4} workers for chunking and PDF tasks")
 
     async def close(self):
         """Cleanup resources - shutdown executor pools."""
         try:
-            self.process_pool.shutdown(wait=False)
+            # self.process_pool.shutdown(wait=False)  # Disabled - using ThreadPool only
             self.thread_pool.shutdown(wait=False)
-            logger.info("Successfully shutdown ProcessPoolExecutor and ThreadPoolExecutor")
+            logger.info("Successfully shutdown ThreadPoolExecutor")
         except Exception as e:
             logger.warning(f"Error shutting down executors: {e}")
 
@@ -399,9 +403,10 @@ class IterativeProcessor:
                 
                 logger.info(f"Processing PDF chunk {start_page}-{end_page} for {url}")
                 
-                # Submit chunk to worker process
+                # Submit chunk to thread pool (not process pool - Celery workers are daemons)
+                # PyMuPDF releases the GIL during PDF operations, so threading is still efficient
                 chunk_markdown = await loop.run_in_executor(
-                    self.process_pool,
+                    self.thread_pool,  # Using thread pool for Celery compatibility
                     worker_process_pdf_from_bytes,
                     pdf_bytes,
                     url,
