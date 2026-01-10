@@ -153,8 +153,9 @@ def chatbot_index_info(request):
             status='completed'
         ).order_by('-completed_at').first()
         
-        # Calculate namespace - simplified for MVP
-        namespace = f"site_{site.id}"
+        # Calculate namespace - use active_namespace from DB (set by indexer with timestamp)
+        # This matches the format: site_{uuid}_{timestamp} used during indexing
+        namespace = site.active_namespace or f"site_{site.id}"
         
         # Prepare response data - simplified for MVP
         site_data = {
