@@ -210,7 +210,7 @@ class Chatbot(BaseModel):
         """Get chatbot backend URL for WebSocket connections"""
         from django.conf import settings
         chatbot_host = getattr(settings, 'CHATBOT_BACKEND_HOST', 'localhost')
-        chatbot_port = getattr(settings, 'CHATBOT_BACKEND_PORT', '8002')
+        chatbot_port = str(getattr(settings, 'CHATBOT_BACKEND_PORT', '8002')).strip()
         
         # Determine protocol based on environment
         protocol = 'wss' if chatbot_host != 'localhost' else 'ws'
@@ -224,7 +224,7 @@ class Chatbot(BaseModel):
         """Get chatbot API URL for HTTP connections (fetch)"""
         from django.conf import settings
         chatbot_host = getattr(settings, 'CHATBOT_BACKEND_HOST', 'localhost')
-        chatbot_port = getattr(settings, 'CHATBOT_BACKEND_PORT', '8002')
+        chatbot_port = str(getattr(settings, 'CHATBOT_BACKEND_PORT', '8002')).strip()
         
         # Determine protocol based on environment
         protocol = 'https' if chatbot_host != 'localhost' else 'http'
@@ -238,7 +238,7 @@ class Chatbot(BaseModel):
         """Get widget JavaScript file URL (full path including .js file)"""
         from django.conf import settings
         widget_host = getattr(settings, 'WIDGET_CDN_HOST', 'localhost')
-        widget_port = getattr(settings, 'WIDGET_CDN_PORT', '')
+        widget_port = str(getattr(settings, 'WIDGET_CDN_PORT', '')).strip()
         widget_script = getattr(settings, 'WIDGET_SCRIPT_PATH', 'widget.js')
         
         # Determine protocol for widget
