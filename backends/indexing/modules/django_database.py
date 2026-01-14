@@ -157,6 +157,7 @@ class DjangoDatabaseManager:
                     max_pages=task_data.get("max_pages", 100),
                     status="queued",
                     task_id=task_data["task_id"],
+                    target_namespace=task_data.get("target_namespace", ""),  # CRITICAL: Preserve namespace for retrieval
                     error_message="",
                     urls_collected=0,
                     urls_processed=0,
@@ -277,22 +278,32 @@ class DjangoDatabaseManager:
                     elif status == 'completed':
                         site.status = 'active'
                         site.last_indexed_at = timezone.now()
-                        
+
+                        # CRITICAL FIX: Update active_namespace from job.target_namespace
+                        # This ensures the widget can find vectors even if webhook fails
+                        if job.target_namespace:
+                            site.active_namespace = job.target_namespace
+                            logger.info(f"Setting site {site.id} active_namespace to {job.target_namespace}")
+
                         # Store IndexedPage records from phase2_result.url_results
                         phase2 = update_fields.get('phase2_result') or {}
                         url_results = phase2.get('url_results', []) if isinstance(phase2, dict) else []
                         if url_results:
                             await self._store_indexed_pages_async(job, url_results)
-                            
+
                         # Refresh site stats after storing pages
                         if IndexedPage:
                             count = await IndexedPage.objects.filter(site_id=site.id, status='indexed').acount()
                             site.indexed_pages_count = count
-                            
+
                             total_docs = await IndexedPage.objects.filter(site_id=site.id, status='indexed').aaggregate(total=Sum('document_count'))
                             site.total_documents = total_docs.get('total') or count
-                        
-                        await site.asave(update_fields=['status', 'last_indexed_at', 'indexed_pages_count', 'total_documents'])
+
+                        # Include active_namespace in update_fields
+                        site_update_fields = ['status', 'last_indexed_at', 'indexed_pages_count', 'total_documents']
+                        if job.target_namespace:
+                            site_update_fields.append('active_namespace')
+                        await site.asave(update_fields=site_update_fields)
 
                     elif status in ['failed', 'cancelled']:
                         site.status = 'active' 

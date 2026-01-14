@@ -9,12 +9,14 @@ import re
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def setup_django():
-    # Load core env
-    load_dotenv("backends/core/.env")
-    # ensure backends/core is in path
+    # ensure backends/core is in path (derived from script location)
     core_path = os.path.dirname(os.path.abspath(__file__))
     if core_path not in sys.path:
         sys.path.insert(0, core_path)
+    
+    # Load core env (relative to script)
+    load_dotenv(os.path.join(core_path, ".env"))
+
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lawa_platform.settings')
     django.setup()
 
