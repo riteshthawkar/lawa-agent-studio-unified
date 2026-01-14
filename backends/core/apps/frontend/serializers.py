@@ -40,7 +40,8 @@ class SiteManagementSerializer(serializers.ModelSerializer):
             'enable_dynamic_content', 'indexing_config',
             'indexing_jobs_count', 'active_indexing_jobs', 'chatbots_count',
             'chatbots', 'last_indexing_job',
-            'excluded_patterns_count', 'active_excluded_patterns_count'
+            'excluded_patterns_count', 'active_excluded_patterns_count',
+            'active_namespace'
         )
     
     def get_indexing_jobs_count(self, obj):
