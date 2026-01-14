@@ -25,7 +25,7 @@ check_endpoint() {
 }
 
 # 1. Check Core Backend
-check_endpoint "Core Backend API" "http://localhost:8000/api/health/" 200 || check_endpoint "Core Backend Root" "http://localhost:8000/" 200
+check_endpoint "Core Backend API" "http://localhost:8000/health/" 200 || check_endpoint "Core Backend Root" "http://localhost:8000/api/docs/" 200
 
 # 2. Check Indexing Service
 check_endpoint "Indexing Service" "http://localhost:8080/health" 200
