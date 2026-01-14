@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Docker
+docker-compose.yml
+docker-compose.override.yml
+docker-compose.test.yml
+Dockerfile
+
+# Webbotify Specific
+node_modules/
+.next/
+dist/
+build/
+.DS_Store
+*.log
+logs/
+staticfiles/
+media/

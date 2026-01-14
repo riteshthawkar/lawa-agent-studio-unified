@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # ========== INFRASTRUCTURE ==========
+  test-db:
+    image: postgres:15-alpine
+    container_name: lawa-test-db
+    environment:
+      POSTGRES_DB: lawa_test
+      POSTGRES_USER: lawa_test
+      POSTGRES_PASSWORD: test_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U lawa_test" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  test-redis:
+    image: redis:7-alpine
+    container_name: lawa-test-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== BACKEND ==========
+  test-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lawa-test-backend
+    ports:
+      - "8100:8000"
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    env_file:
+      - .env.test
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - WEB_CONCURRENCY=1 # Force 1 worker
+      - CELERY_WORKER_CONCURRENCY=1
+    # Skip collectstatic and use dev server for lighter memory footprint in tests
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:8000"
+
+  # ========== INDEXING SERVICE ==========
+  test-indexing:
+    build:
+      context: .
+      dockerfile: website_indexing_backend/Dockerfile
+    container_name: lawa-test-indexing
+    ports:
+      - "8180:8080"
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    env_file:
+      - .env.test
+    environment:
+      - BACKEND_BASE_URL=http://test-backend:8000
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - USE_CELERY_WORKER=False
+      - WEB_CONCURRENCY=1
+    command: uvicorn app:app --host 0.0.0.0 --port 8080 --workers 1
+
+  # ========== CHATBOT SERVICE ==========
+  test-chatbot:
+    build:
+      context: ./EMBEDDED_CHATBOT/backend
+      dockerfile: Dockerfile
+    container_name: lawa-test-chatbot
+    ports:
+      - "8102:8002"
+    depends_on:
+      test-redis:
+        condition: service_healthy
+    env_file:
+      - .env.test
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - CHATBOT_BACKEND_PORT=8002
+    command: python main.py
+
+networks:
+  default:
+    name: lawa-test-network
+
+volumes:
+  test_postgres_data:

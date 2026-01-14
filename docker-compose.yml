@@ -22,7 +22,7 @@ services:
   # ---------------------------------------------------------------------------
   backend:
     build:
-      context: ./backend
+      context: ./backends/core
       dockerfile: Dockerfile
     image: lawa-backend:latest
     container_name: lawa-backend
@@ -32,14 +32,14 @@ services:
     volumes:
       - shared_data:/app/data # Shared data directory
       # Mount source code for optional hot-reloading (remove in prod if prefer immutable)
-      - ./backend:/app
+      - ./backends/core:/app
     depends_on:
       redis:
         condition: service_healthy
       indexing-service:
         condition: service_started
     env_file:
-      - ./backend/.env
+      - ./backends/core/.env
     environment:
       # DB Credentials are read effectively from .env file now.
       - REDIS_URL=redis://redis:6379/1
@@ -51,19 +51,19 @@ services:
 
   backend-worker:
     build:
-      context: ./backend
+      context: ./backends/core
       dockerfile: Dockerfile
     image: lawa-backend:latest
     container_name: lawa-backend-worker
     restart: always
     volumes:
       - shared_data:/app/data
-      - ./backend:/app
+      - ./backends/core:/app
     depends_on:
       redis:
         condition: service_healthy
     env_file:
-      - ./backend/.env
+      - ./backends/core/.env
     environment:
       # DB Credentials are read effectively from .env file now.
       - REDIS_URL=redis://redis:6379/1
@@ -77,7 +77,7 @@ services:
   indexing-service:
     build:
       context: .
-      dockerfile: website_indexing_backend/Dockerfile
+      dockerfile: backends/indexing/Dockerfile
     image: lawa-indexing-service:latest
     container_name: lawa-indexing-service
     restart: always
@@ -85,13 +85,13 @@ services:
       - "8080:8080"
     volumes:
       - shared_data:/app/data
-      - ./website_indexing_backend:/app/website_indexing_backend
-      - ./backend:/app/backend
+      - ./backends/indexing:/app/website_indexing_backend
+      - ./backends/core:/app/core
     depends_on:
       redis:
         condition: service_healthy
     env_file:
-      - ./website_indexing_backend/.env
+      - ./backends/indexing/.env
     environment:
       - DATA_DIR=/app/data
       - REDIS_URL=redis://redis:6379/2
@@ -102,19 +102,19 @@ services:
   indexing-worker:
     build:
       context: .
-      dockerfile: website_indexing_backend/Dockerfile
+      dockerfile: backends/indexing/Dockerfile
     image: lawa-indexing-service:latest
     container_name: lawa-indexing-worker
     restart: always
     volumes:
       - shared_data:/app/data
-      - ./website_indexing_backend:/app/website_indexing_backend
-      - ./backend:/app/backend
+      - ./backends/indexing:/app/website_indexing_backend
+      - ./backends/core:/app/core
     depends_on:
       redis:
         condition: service_healthy
     env_file:
-      - ./website_indexing_backend/.env
+      - ./backends/indexing/.env
     environment:
       - DATA_DIR=/app/data
       - REDIS_URL=redis://redis:6379/2
@@ -133,7 +133,7 @@ services:
   # ---------------------------------------------------------------------------
   chatbot-service:
     build:
-      context: ./EMBEDDED_CHATBOT/backend
+      context: ./backends/widget
       dockerfile: Dockerfile
     image: lawa-chatbot-service:latest
     container_name: lawa-chatbot-service
@@ -146,7 +146,7 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - ./EMBEDDED_CHATBOT/backend/.env
+      - ./backends/widget/.env
     environment:
       - HOST=0.0.0.0
       - PORT=8002

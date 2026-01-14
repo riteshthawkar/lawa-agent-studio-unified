@@ -150,11 +150,11 @@ bower_components/
 # Environment Variables
 # =========================
 # Specific environment files to ignore
-backend/.env
-website_indexing_backend/.env
-EMBEDDED_CHATBOT/backend/.env
-EMBEDDED_CHATBOT_FRONTEND/*
-frontend/*
+backends/core/.env
+backends/indexing/.env
+backends/widget/.env
+frontends/
+widget_testing/
 CLAUDE.md
 
 # =========================

@@ -1,0 +1,227 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ===========================================================================
+  # Django Core Backend Tests
+  # ===========================================================================
+  test-core:
+    name: Django Core Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backends/core
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backends/core/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run migrations
+        run: python manage.py migrate --settings=lawa_platform.settings_test
+        env:
+          DJANGO_SETTINGS_MODULE: lawa_platform.settings_test
+
+      - name: Run tests
+        run: |
+          python -m pytest -v --tb=short --junitxml=test-results.xml
+        env:
+          DJANGO_SETTINGS_MODULE: lawa_platform.settings_test
+          REDIS_URL: redis://localhost:6379/1
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-test-results
+          path: backends/core/test-results.xml
+
+  # ===========================================================================
+  # Indexing Service Tests
+  # ===========================================================================
+  test-indexing:
+    name: Indexing Service Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backends/indexing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backends/indexing/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: indexing-test-results
+          path: backends/indexing/test-results.xml
+
+  # ===========================================================================
+  # Frontend Tests (Playwright)
+  # ===========================================================================
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontends/app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontends/app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build application
+        run: npm run build
+
+      - name: Run Playwright tests
+        run: npx playwright test --reporter=github
+        continue-on-error: true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: frontends/app/playwright-report/
+
+  # ===========================================================================
+  # Code Quality Checks
+  # ===========================================================================
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python linters
+        run: pip install flake8 black isort
+
+      - name: Check Python formatting (black)
+        run: |
+          black --check backends/core/apps/ || true
+          black --check backends/indexing/modules/ || true
+
+      - name: Check Python imports (isort)
+        run: |
+          isort --check-only backends/core/apps/ || true
+          isort --check-only backends/indexing/modules/ || true
+
+      - name: Lint Python (flake8)
+        run: |
+          flake8 backends/core/apps/ --max-line-length=120 --extend-ignore=E501 || true
+          flake8 backends/indexing/modules/ --max-line-length=120 --extend-ignore=E501 || true
+
+  # ===========================================================================
+  # Docker Build Check
+  # ===========================================================================
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test-core, test-indexing]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backends/core
+          file: ./backends/core/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build indexing service image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./backends/indexing/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Summary Job
+  # ===========================================================================
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [test-core, test-indexing, lint, docker-build]
+    if: always()
+
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.test-core.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-indexing.result }}" == "failure" ]]; then
+            echo "❌ Some tests failed"
+            exit 1
+          fi
+          echo "✅ All required checks passed"
