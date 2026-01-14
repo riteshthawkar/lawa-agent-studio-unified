@@ -202,3 +202,21 @@ flowchart TD
     ```bash
     docker-compose up -d --scale indexing-worker=3
     ```
+
+
+
+
+
+
+
+# 1. Tear down EVERYTHING (removes containers, networks, and orphans)
+docker-compose down --remove-orphans
+
+# 2. Check if anything survived (should be empty or unrelated containers only)
+docker ps -a
+
+# 3. If you see ANY container related to 'lawa' or 'redis' in step 2, copy its ID and kill it:
+# docker rm -f <CONTAINER_ID>
+
+# 4. Rebuild and start fresh
+docker-compose up -d --build

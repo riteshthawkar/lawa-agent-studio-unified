@@ -119,7 +119,8 @@ async def execute_indexing_pipeline(
             phase2_result=result.get("phase2_result"),
             urls_collected=stats.get("total_urls_collected", 0),
             urls_processed=stats.get("total_urls_processed", 0),
-            documents_indexed=stats.get("total_documents_indexed", 0)
+            documents_indexed=stats.get("total_documents_indexed", 0),
+            pages_indexed=stats.get("total_urls_successful", 0)  # Bug fix: Explicitly pass pages_indexed
         )
 
         # Send final webhook callback if configured (with full result data)

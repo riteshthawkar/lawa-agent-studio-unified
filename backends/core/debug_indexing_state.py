@@ -5,7 +5,7 @@ import sys
 from django.conf import settings
 
 # Setup Django environment
-sys.path.append('/app')
+sys.path.append(os.getcwd())
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'lawa_platform.settings')
 django.setup()
 
@@ -13,7 +13,7 @@ from apps.sites.models import Site
 from apps.indexing.models import IndexingJob
 
 def check_indexing_state():
-    print("\n--- DEBUGGING INDEXING STATE ---\n")
+    print("--- DEBUGGING INDEXING STATE ---")
     
     # 1. Check Sites
     sites = Site.objects.all().order_by('-created_at')[:5]

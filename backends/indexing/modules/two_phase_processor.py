@@ -237,15 +237,18 @@ class TwoPhaseProcessor:
             # Update overall stats
             self.overall_stats["total_urls_processed"] = phase2_result["stats"]["urls_processed"]
             self.overall_stats["total_documents_indexed"] = phase2_result["stats"]["documents_indexed"]
+            self.overall_stats["total_urls_successful"] = phase2_result["stats"].get("urls_successful", 0)
             
             # Final database update with all stats
             if self.db_manager and self.task_id:
+                pages_indexed_val = phase2_result["stats"].get("urls_successful", 0)
+                logger.info(f"Updated DB task {self.task_id} status to processing_urls (pages_indexed={pages_indexed_val})")
                 await self.db_manager.update_task_status(
                     self.task_id,
                     "processing_urls",
                     urls_processed=phase2_result["stats"]["urls_processed"],
                     documents_indexed=phase2_result["stats"]["documents_indexed"],
-                    pages_indexed=phase2_result["stats"].get("urls_successful", 0)
+                    pages_indexed=pages_indexed_val
                 )
             self.overall_stats["total_duration"] = time.time() - self.overall_stats["start_time"]
             
