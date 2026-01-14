@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Add backend to path immediately to allow Django settings to load
 # This matches the volume mount /app/backend in Docker
-backend_path = Path(__file__).resolve().parent.parent / "backend"
+backend_path = Path(__file__).resolve().parent.parent / "core"
 if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
