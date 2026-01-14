@@ -110,13 +110,13 @@ class IndexingService:
                 url=request_url,
                 max_pages=max_pages,
                 target_namespace=target_namespace,
-                target_namespace=target_namespace,
                 callback_url=callback_url,  # Store for retries
                 # Explicitly set defaults to avoid IntegrityError if DB schema is strict
                 pages_indexed=0,
                 documents_indexed=0,
                 urls_collected=0,
                 urls_processed=0
+            )
         except Exception as e:
             # Check for unique constraint violation (IntegrityError)
             # We catch generic Exception and check string because importing IntegrityError 
