@@ -128,9 +128,11 @@ services:
       - USE_CELERY_WORKER=True
       - CELERY_WORKER_CONCURRENCY=2
       # Per-job rate limiting: each job gets fair share of API quota
-      - GEMINI_RATE_LIMIT=120
+      - GEMINI_RATE_LIMIT=600
       - ENABLE_PER_JOB_RATE_LIMIT=True
-    command: celery -A celery_app worker -l info -Q indexing_priority,celery --hostname=priority@%h
+      # Increase timeout for worker startup (BM25 loading takes time)
+      - CELERYD_PREFORK_CHILD_TIMEOUT=60
+    command: celery -A celery_app worker -l info -Q indexing_priority,celery --hostname=priority@%h --prefetch-multiplier=1
     healthcheck:
       test: [ "CMD-SHELL", "celery -A celery_app inspect ping -d priority@$$(hostname) || exit 1" ]
       interval: 60s
@@ -140,9 +142,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M
+          memory: 3072M
         reservations:
-          memory: 512M
+          memory: 1024M
 
   # Worker 2: DEFAULT - Large/heavy jobs (>= 50 pages)
   # Handles resource-intensive jobs without blocking priority queue
@@ -168,9 +170,11 @@ services:
       - USE_CELERY_WORKER=True
       - CELERY_WORKER_CONCURRENCY=2
       # Per-job rate limiting: each job gets fair share of API quota
-      - GEMINI_RATE_LIMIT=120
+      - GEMINI_RATE_LIMIT=600
       - ENABLE_PER_JOB_RATE_LIMIT=True
-    command: celery -A celery_app worker -l info -Q indexing_default,celery --hostname=default@%h
+      # Increase timeout for worker startup (BM25 loading takes time)
+      - CELERYD_PREFORK_CHILD_TIMEOUT=60
+    command: celery -A celery_app worker -l info -Q indexing_default,celery --hostname=default@%h --prefetch-multiplier=1
     healthcheck:
       test: [ "CMD-SHELL", "celery -A celery_app inspect ping -d default@$$(hostname) || exit 1" ]
       interval: 60s
@@ -180,9 +184,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M
+          memory: 3072M
         reservations:
-          memory: 512M
+          memory: 1024M
 
   # ---------------------------------------------------------------------------
   # CHATBOT WIDGET BACKEND (Port 8002)
