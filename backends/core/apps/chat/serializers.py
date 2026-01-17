@@ -18,13 +18,14 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     """Serializer for ChatSession model"""
     messages = ChatMessageSerializer(many=True, read_only=True)
     feedback = serializers.SerializerMethodField()
+    first_message = serializers.SerializerMethodField()
     
     class Meta:
         model = ChatSession
         fields = (
             'id', 'org_id', 'chatbot_id', 'site_id', 'user_id',
             'session_key', 'meta', 'created_at', 'closed_at',
-            'messages', 'feedback'
+            'messages', 'feedback', 'first_message'
         )
         read_only_fields = ('id', 'org_id', 'session_key', 'created_at', 'closed_at')
 
@@ -48,6 +49,17 @@ class ChatSessionSerializer(serializers.ModelSerializer):
             return 'dislike'
             
         return 'no_feedback'
+
+    def get_first_message(self, obj):
+        """Get the first user message content for conversation title"""
+        first_user_msg = obj.messages.filter(role='user').order_by('created_at').first()
+        if first_user_msg:
+            content = first_user_msg.content
+            # Return truncated content if longer than 100 chars
+            if len(content) > 100:
+                return content[:100] + '...'
+            return content
+        return None
 
 
 class ChatFeedbackSerializer(serializers.ModelSerializer):
