@@ -6,6 +6,7 @@ urlpatterns = [
     # Authentication
     path('signup/', views.UserRegistrationView.as_view(), name='user-signup'),
     path('login/', views.UserLoginView.as_view(), name='user-login'),
+    path('google/', views.GoogleAuthView.as_view(), name='google-auth'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
     path('resend-otp/', views.ResendOTPView.as_view(), name='resend-otp'),

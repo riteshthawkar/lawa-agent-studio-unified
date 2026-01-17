@@ -216,3 +216,8 @@ class SupportRequestSerializer(serializers.ModelSerializer):
             validated_data['user_agent'] = request.META.get('HTTP_USER_AGENT', '')[:500]
 
         return super().create(validated_data)
+
+
+class GoogleAuthSerializer(serializers.Serializer):
+    """Serializer for Google Authentication"""
+    code = serializers.CharField(required=True)

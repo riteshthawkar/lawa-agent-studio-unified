@@ -17,7 +17,8 @@ from .serializers import (
     ResetPasswordSerializer,
     UserPreferencesSerializer,
     UserFeedbackSerializer,
-    SupportRequestSerializer
+    SupportRequestSerializer,
+    GoogleAuthSerializer
 )
 from django.utils import timezone
 from apps.core.views import BaseViewSet
@@ -26,6 +27,10 @@ from apps.background_jobs.models import OutboxEvent
 from apps.core.logging_config import get_logger
 from django.db import transaction
 from .services import AuthenticationService
+import requests
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from django.conf import settings
 
 logger = get_logger(__name__)
 
@@ -995,3 +1000,164 @@ def send_test_email(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+class GoogleAuthView(generics.GenericAPIView):
+    """
+    Google Login/Signup Endpoint
+    POST /v1/auth/google/
+    """
+    serializer_class = GoogleAuthSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data['code']
+
+        try:
+            # Exchange Authorization Code for Tokens
+            token_endpoint = "https://oauth2.googleapis.com/token"
+            payload = {
+                'code': code,
+                'client_id': settings.GOOGLE_OAUTH_CLIENT_ID,
+                'client_secret': settings.GOOGLE_OAUTH_CLIENT_SECRET,
+                'redirect_uri': 'postmessage', # Important for popup flow
+                'grant_type': 'authorization_code'
+            }
+            
+            response = requests.post(token_endpoint, data=payload)
+            
+            if response.status_code != 200:
+                logger.error(f"Google Token Exchange Failed: {response.text}")
+                return Response(
+                    {'error': 'Failed to exchange authorization code'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            tokens = response.json()
+            id_token_jwt = tokens.get('id_token')
+            
+            # Verify the ID Token (Double check signature and get claims)
+            try:
+                # We can verify audience here since we have the ID loaded
+                idinfo = id_token.verify_oauth2_token(
+                    id_token_jwt, 
+                    google_requests.Request(), 
+                    audience=settings.GOOGLE_OAUTH_CLIENT_ID
+                )
+            except ValueError as e:
+                logger.error(f"Invalid ID Token: {str(e)}")
+                return Response(
+                    {'error': 'Invalid ID Token'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get user info
+            email = idinfo['email']
+            name = idinfo.get('name', '')
+            
+            # Check if email is verified by Google
+            if not idinfo.get('email_verified'):
+                return Response(
+                    {'error': 'Google account email not verified.'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get or Create User
+            try:
+                user = User.objects.get(email=email)
+                # If user exists but inactive, check if we should activate them
+                # Google authentication is strong proof of email ownership
+                if not user.is_active:
+                    user.is_active = True
+                    user.is_email_verified = True
+                    user.save()
+                    logger.info(f"Re-activated user {user.email} via Google Auth verification")
+            except User.DoesNotExist:
+                # Create new user
+                with transaction.atomic():
+                    # Generate a random password (user won't use it)
+                    password = User.objects.make_random_password()
+                    username = email # Use email as username
+                    
+                    user = User.objects.create_user(
+                        username=username,
+                        email=email,
+                        password=password,
+                        name=name,
+                        is_email_verified=True # Trust Google
+                    )
+                    
+                    # Create default organization (Same logic as Registration)
+                    org_name = f"{user.name}'s Organization"
+                    org_slug = f"{user.username}-org"
+                    
+                    # Ensure unique slug
+                    counter = 1
+                    original_slug = org_slug
+                    while Organization.objects.filter(slug=org_slug).exists():
+                        org_slug = f"{original_slug}-{counter}"
+                        counter += 1
+                    
+                    organization = Organization.objects.create(
+                        name=org_name,
+                        slug=org_slug,
+                        status='active',
+                        plan_tier='trial'
+                    )
+                    
+                    # Create owner membership
+                    Membership.objects.create(
+                        user=user,
+                        organization=organization,
+                        role='owner'
+                    )
+
+            # Login and Generate Tokens
+            login(request, user)
+            
+            # Get primary org
+            primary_org = Organization.objects.filter(
+                memberships__user=user,
+                memberships__role='owner'
+            ).first()
+            
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            access_token = refresh.access_token
+            
+            if primary_org:
+                access_token['org_id'] = str(primary_org.id)
+                access_token['org_name'] = primary_org.name
+            
+            response_data = {
+                'message': 'Login successful',
+                'user': UserSerializer(user).data,
+                'tokens': {
+                    'access': str(access_token),
+                    'refresh': str(refresh),
+                }
+            }
+            
+            if primary_org:
+                response_data['organization'] = {
+                    'id': str(primary_org.id),
+                    'name': primary_org.name,
+                    'slug': primary_org.slug,
+                    'plan_tier': primary_org.plan_tier
+                }
+            
+            return Response(response_data)
+
+        except ValueError as e:
+            # Invalid token
+            return Response(
+                {'error': 'Invalid Google token'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Google login failed: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Authentication failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
