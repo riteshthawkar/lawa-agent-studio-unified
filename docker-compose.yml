@@ -47,6 +47,8 @@ services:
       # Internal service URLs
       - INDEXING_API_BASE=http://indexing-service:8080
       - CHATBOT_API_BASE=http://chatbot-service:8002
+      # Webhook callback URL - must use Docker service name, not localhost
+      - BACKEND_BASE_URL=http://backend:8000
     command: gunicorn --bind 0.0.0.0:8000 --workers 3 lawa_platform.wsgi:application
 
   backend-worker:
