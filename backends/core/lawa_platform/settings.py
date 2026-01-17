@@ -69,6 +69,7 @@ LOCAL_APPS = [
     'apps.support',
     'apps.payments',
     'apps.admin_api',
+    'apps.analytics',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -372,7 +373,7 @@ SPECTACULAR_SETTINGS = {
     # Basic Info
     'TITLE': 'Lawa Platform API',
     'DESCRIPTION': '''
-    **Lawa Webbotify Platform API**
+    **Lawa Agent Studio Platform API**
 
     Production-ready API for managing websites, chatbots, and AI-powered interactions.
 
@@ -498,6 +499,17 @@ BACKEND_BASE_URL = env('BACKEND_BASE_URL', default='http://localhost:8000')
 PINECONE_API_KEY = env('PINECONE_API_KEY', default='')
 PINECONE_INDEX_NAME = env('PINECONE_INDEX_NAME', default=env('DEFAULT_PINECONE_INDEX', default='webbotify-index-3072'))
 
+# OpenAI Configuration for LLM-powered features
+OPENAI_API_KEY = env('OPENAI_API_KEY', default='')
+
+# Lead Scoring Configuration
+# Set to True to enable LLM-powered lead scoring (requires OPENAI_API_KEY)
+LEAD_SCORING_USE_LLM = env.bool('LEAD_SCORING_USE_LLM', default=False)
+# Model to use for LLM scoring (gpt-4o-mini is cost-effective, gpt-4o for higher accuracy)
+LEAD_SCORING_LLM_MODEL = env('LEAD_SCORING_LLM_MODEL', default='gpt-4o-mini')
+# Minimum rule-based score to trigger LLM enhancement in hybrid mode
+LEAD_SCORING_LLM_THRESHOLD = env.int('LEAD_SCORING_LLM_THRESHOLD', default=25)
+
 # Stripe Configuration
 STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY', default='')
 STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY', default='')
@@ -534,6 +546,41 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Celery Beat Schedule for periodic tasks
+# Note: These can also be managed via Django admin with django_celery_beat
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    # Score recent chat sessions daily at 2 AM
+    'score-sessions-daily': {
+        'task': 'apps.analytics.tasks.score_recent_sessions',
+        'schedule': crontab(hour=2, minute=0),
+        'args': (24,),  # Score sessions from last 24 hours
+    },
+    # Generate weekly reports every Monday at 8 AM
+    'generate-weekly-reports': {
+        'task': 'apps.analytics.tasks.generate_weekly_reports',
+        'schedule': crontab(hour=8, minute=0, day_of_week=1),
+    },
+    # Send scheduled report emails every hour
+    'send-scheduled-reports': {
+        'task': 'apps.analytics.tasks.send_scheduled_reports',
+        'schedule': crontab(minute=0),  # Every hour at :00
+    },
+    # Cleanup old lead scores yearly
+    'cleanup-old-lead-scores': {
+        'task': 'apps.analytics.tasks.cleanup_old_lead_scores',
+        'schedule': crontab(hour=3, minute=0, day_of_month=1),  # 1st of each month at 3 AM
+        'args': (365,),  # Keep 1 year of data
+    },
+    # Batch enhance warm leads with LLM (only runs if LEAD_SCORING_USE_LLM is enabled)
+    'batch-enhance-warm-leads-llm': {
+        'task': 'apps.analytics.tasks.batch_enhance_warm_leads_with_llm',
+        'schedule': crontab(hour=4, minute=0),  # Daily at 4 AM
+        'kwargs': {'days': 7, 'limit': 50},  # Last 7 days, max 50 leads per run
+    },
+}
 
 # Logging Configuration
 # Ensure logs directory exists
@@ -711,7 +758,8 @@ CACHES = {
 if env.bool('TESTING', default=False):
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 else:
-    EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+    # Use our custom Resend backend
+    EMAIL_BACKEND = env('EMAIL_BACKEND', default='lawa_platform.email_backends.ResendEmailBackend')
 EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
 EMAIL_PORT = env.int('EMAIL_PORT', default=587)
 EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)

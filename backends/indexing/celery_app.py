@@ -2,6 +2,7 @@
 import os
 import logging
 from celery import Celery
+from kombu import Queue, Exchange
 import sys
 from pathlib import Path
 
@@ -29,6 +30,30 @@ logger = logging.getLogger(__name__)
 broker_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("website_indexing", broker=broker_url, include=['tasks'])
 
+# Define exchanges and queues for priority-based routing
+default_exchange = Exchange('indexing', type='direct')
+
+# Priority queues configuration
+# - indexing_priority: Small jobs (< 50 pages) - processed quickly
+# - indexing_default: Large jobs (>= 50 pages) - may take longer
+CELERY_QUEUES = (
+    Queue('celery', default_exchange, routing_key='celery'),  # Default fallback
+    Queue('indexing_priority', default_exchange, routing_key='indexing.priority'),
+    Queue('indexing_default', default_exchange, routing_key='indexing.default'),
+)
+
+# Task routing based on job size (configured in app.py when dispatching)
+CELERY_TASK_ROUTES = {
+    'indexing.process_site': {
+        'queue': 'indexing_default',  # Default queue, overridden at dispatch time
+        'routing_key': 'indexing.default',
+    },
+    'indexing.process_site_priority': {
+        'queue': 'indexing_priority',
+        'routing_key': 'indexing.priority',
+    },
+}
+
 # Configure Celery
 celery_app.conf.update(
     task_serializer="json",
@@ -37,9 +62,20 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     # Worker configuration
-    worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", "2")), # Default low concurrency as tasks are heavy
+    worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", "2")),  # Default low concurrency as tasks are heavy
     worker_prefetch_multiplier=1,  # Critical for long running tasks to prevent hogging
-    task_acks_late=True, # Ensure task is acked only after completion
+    task_acks_late=True,  # Ensure task is acked only after completion
+    # Priority queue configuration
+    task_queues=CELERY_QUEUES,
+    task_routes=CELERY_TASK_ROUTES,
+    task_default_queue='celery',
+    task_default_exchange='indexing',
+    task_default_routing_key='celery',
+    # Task time limits (prevent runaway tasks)
+    task_soft_time_limit=3600,  # 1 hour soft limit (sends SoftTimeLimitExceeded)
+    task_time_limit=7200,  # 2 hour hard limit (kills task)
+    # Result backend (optional - for tracking)
+    result_expires=86400,  # Results expire after 24 hours
 )
 
 # Global embedder instance for the worker process

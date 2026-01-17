@@ -104,9 +104,9 @@ def dashboard_stats(request):
         chatbots_count = chatbots_qs.count()
         active_chatbots = chatbots_qs.filter(status='active').count()
         
-        # Chat session statistics (last 30 days)
+        # Chat session statistics (last 30 days) - Filtered by user's organizations
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        recent_sessions = ChatSession.objects.filter(created_at__gte=thirty_days_ago)
+        recent_sessions = ChatSession.objects.filter(org_id__in=org_ids, created_at__gte=thirty_days_ago)
         total_sessions = recent_sessions.count()
         active_sessions = recent_sessions.filter(closed_at__isnull=True).count()
         
@@ -1390,7 +1390,8 @@ def analytics_data(request):
         
         # Get session aggregates in one go
         session_aggregates = ChatSession.objects.filter(session_filter).aggregate(
-            total_sessions=Count('id'),
+            # Only count sessions that have at least one user message
+            total_sessions=Count('id', filter=Q(messages__role='user'), distinct=True),
             avg_duration=Avg(
                 ExpressionWrapper(
                     F('last_activity') - F('created_at'),
@@ -1400,6 +1401,7 @@ def analytics_data(request):
             total_messages=Count('messages', filter=Q(messages__role='user'))
         )
         
+        # Max ensure total_sessions is at least 1 if messages exist (though aggregations handle this)
         total_sessions = session_aggregates['total_sessions'] or 0
         total_messages = session_aggregates['total_messages'] or 0 # Total user queries
         
@@ -1666,7 +1668,7 @@ def analytics_data(request):
         # ---------------------------------------------------------
         # 6. Indexing Health Stats (New Feature)
         # ---------------------------------------------------------
-        
+
         # Only relevant if a specific site is selected, or we can aggregate for all selected sites
         # Let's aggregate for all user_site_ids currently in scope
         
@@ -1691,6 +1693,47 @@ def analytics_data(request):
             'success_rate': idx_success_rate
         }
 
+        # ---------------------------------------------------------
+        # 7. Geo Analytics (New Feature)
+        # ---------------------------------------------------------
+        
+        # Aggregate by country
+        country_data = ChatSession.objects.filter(session_filter).exclude(
+            Q(geo_country_code__isnull=True) | Q(geo_country_code='')
+        ).values('geo_country_code', 'geo_country_name').annotate(
+            count=Count('id')
+        ).order_by('-count')[:20]
+        
+        geo_analytics = {
+            'countries': [
+                {
+                    'code': item['geo_country_code'],
+                    'name': item['geo_country_name'] or item['geo_country_code'],
+                    'count': item['count'],
+                    'percentage': round(item['count'] / total_sessions * 100, 1) if total_sessions > 0 else 0
+                }
+                for item in country_data
+            ],
+            'cities': [] # Keep cities empty for now to avoid query overhead, or implement if needed
+        }
+        
+        # Aggregate top cities if countries exist
+        if country_data:
+             city_data = ChatSession.objects.filter(session_filter).exclude(
+                Q(geo_city__isnull=True) | Q(geo_city='')
+            ).values('geo_city', 'geo_country_code').annotate(
+                count=Count('id')
+            ).order_by('-count')[:10]
+             
+             geo_analytics['cities'] = [
+                {
+                    'name': item['geo_city'],
+                    'country_code': item['geo_country_code'],
+                    'count': item['count']
+                }
+                for item in city_data
+             ]
+
 
         return Response({
             'total_sessions': total_sessions,
@@ -1704,6 +1747,7 @@ def analytics_data(request):
             'top_content': top_content,
             'traffic_stats': traffic_stats,
             'indexing_stats': indexing_stats,
+            'geo_analytics': geo_analytics,
             # Tier information for frontend
             'tier': {
                 'plan': plan,
@@ -1773,15 +1817,15 @@ def query_analytics(request):
         end_date = timezone.now()
         start_date = end_date - timedelta(days=days)
 
+        # Build base filter
+        base_filter = Q(session__org_id__in=org_ids, role='user', created_at__gte=start_date)
+        if site_id:
+            base_filter &= Q(session__site_id=site_id)
+        if chatbot_id:
+            base_filter &= Q(session__chatbot_id=chatbot_id)
+
         # Get user messages (queries) across all sessions for the org, within the date range
-        # We filter by session__org_id to ensure multitenancy, not by session__created_at
-        user_messages = ChatMessage.objects.filter(
-            session__org_id__in=org_ids,
-            session__site_id=site_id if site_id else Q(), # Apply site filter if present
-            session__chatbot_id=chatbot_id if chatbot_id else Q(), # Apply chatbot filter if present
-            role='user',
-            created_at__gte=start_date
-        ).order_by('-created_at')
+        user_messages = ChatMessage.objects.filter(base_filter).order_by('-created_at')
 
         total_queries = user_messages.count()
 
@@ -1854,35 +1898,82 @@ def query_analytics(request):
             'repeat_rate': round((1 - unique_queries / total_queries) * 100, 1) if total_queries > 0 else 0
         }
 
-        # Simple categorization based on common patterns
-        categories = {
-            'how_to': 0,
-            'what_is': 0,
-            'pricing': 0,
-            'support': 0,
-            'features': 0,
-            'other': 0
-        }
-
-        for query in normalized_queries:
-            if not query:
-                continue
-            if query.startswith('how') or 'how to' in query or 'how do' in query:
-                categories['how_to'] += 1
-            elif query.startswith('what') or 'what is' in query or 'what are' in query:
-                categories['what_is'] += 1
-            elif any(word in query for word in ['price', 'cost', 'pricing', 'pay', 'subscription', 'plan']):
-                categories['pricing'] += 1
-            elif any(word in query for word in ['help', 'support', 'issue', 'problem', 'error', 'bug']):
-                categories['support'] += 1
-            elif any(word in query for word in ['feature', 'can i', 'does it', 'capability', 'able to']):
-                categories['features'] += 1
+        # Query Categorization
+        # Priority: Use LLM-classified category from DB. 
+        # Fallback: Use simple keyword matching if category is missing.
+        
+        # 1. Aggregate DB categories
+        db_categories = user_messages.values('query_category').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        category_map = Counter()
+        uncategorized_queries = []
+        
+        for item in db_categories:
+            cat = item['query_category']
+            count = item['count']
+            if cat:
+                category_map[cat] += count
             else:
-                categories['other'] += 1
+                # Capture count of uncategorized for fallback processing
+                # We can't easily get the *content* of these specific messages here without another query
+                # So we'll iterate through normalized_queries for fallback, but respecting the counts we already have
+                pass
 
+        # 2. Fallback: Iterate through queries that likely didn't have a category 
+        # (This is an approximation since we don't map specific query strings to their specific DB rows here easily for all)
+        # Better approach: Iterate the sample `normalized_queries` we already fetched, 
+        # BUT only if we have very little DB category data.
+        
+        # Actually, a hybrid approach is best:
+        # If DB has good data (most rows have category), rely on it.
+        # If DB is empty of categories (legacy data), use regex.
+        
+        total_db_categorized = sum(category_map.values())
+        coverage_ratio = total_db_categorized / total_queries if total_queries > 0 else 0
+        
+        if coverage_ratio < 0.5:
+            # Low DB data coverage, supplement with regex on the SAMPLE we fetched
+            regex_stats = Counter()
+            for query in normalized_queries:
+                if not query: continue
+                
+                # Check regex patterns
+                if query.startswith('how') or 'how to' in query or 'how do' in query:
+                    regex_stats['how_to'] += 1
+                elif query.startswith('what') or 'what is' in query or 'what are' in query:
+                    regex_stats['what_is'] += 1
+                elif any(word in query for word in ['price', 'cost', 'pricing', 'pay', 'subscription', 'plan']):
+                    regex_stats['pricing'] += 1
+                elif any(word in query for word in ['help', 'support', 'issue', 'problem', 'error', 'bug']):
+                    regex_stats['support'] += 1
+                elif any(word in query for word in ['feature', 'can i', 'does it', 'capability', 'able to']):
+                    regex_stats['features'] += 1
+                else:
+                    regex_stats['other'] += 1
+            
+            # Merge logic: If DB category exists, use it. If not, maybe use regex?
+            # Simpler: Just use regex stats if coverage is low (legacy mode)
+            # Or better: Add regex counts to 'other' or blend? 
+            # Let's strictly use the DB categories if they exist, and valid regex categories.
+            
+            # Since we can't easily merge without row-level logic, let's just use the regex mapping 
+            # to populate standard categories if they are missing from DB map.
+            for cat, count in regex_stats.items():
+                # Only add if we don't have this category from DB (to avoid double counting if DB uses same names)
+                # But DB probably uses different names.
+                # Let's just normalize the DB categories to be cleaner if needed.
+                # For now, let's just present what we have.
+                if cat not in category_map:
+                     # Scale the sample count to total? No, normalized_queries is top 1000.
+                     # Let's just use the sample counts for the fallback.
+                     category_map[cat] += count
+        
+        # Format for response
         query_categories = [
-            {'category': cat, 'count': count, 'percentage': round(count / total_queries * 100, 1)}
-            for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True)
+            {'category': cat.replace('_', ' ').title(), 'count': count, 'percentage': round(count / total_queries * 100, 1)}
+            for cat, count in category_map.most_common(10) # Top 10 categories
             if count > 0
         ]
 
@@ -1899,14 +1990,14 @@ def query_analytics(request):
         # But efficiently: 
         # Let's find assistant messages with dislike first
         
-        disliked_assistant_msgs = ChatMessage.objects.filter(
-            session__org_id__in=org_ids,
-            session__site_id=site_id if site_id else Q(), 
-            session__chatbot_id=chatbot_id if chatbot_id else Q(),
-            role='assistant',
-            feedback='dislike',
-            created_at__gte=start_date
-        ).select_related('session')
+        # Build filter for disliked assistant messages
+        dislike_filter = Q(session__org_id__in=org_ids, role='assistant', feedback='dislike', created_at__gte=start_date)
+        if site_id:
+            dislike_filter &= Q(session__site_id=site_id)
+        if chatbot_id:
+            dislike_filter &= Q(session__chatbot_id=chatbot_id)
+
+        disliked_assistant_msgs = ChatMessage.objects.filter(dislike_filter).select_related('session').prefetch_related('feedbacks')
         
         unanswered_queries = []
         for amsg in disliked_assistant_msgs[:50]: # Limit to reasonable number
@@ -1918,12 +2009,16 @@ def query_analytics(request):
                 role='user'
             ).order_by('-created_at').first()
             
+            # Get feedback comment if exists
+            # Get feedback comment if exists - COMMENT FIELD REMOVED
+            feedback_comment = ''
+
             if prev_msg and prev_msg.content:
                  unanswered_queries.append({
                      'query': prev_msg.content,
                      'session_id': str(amsg.session.id),
                      'timestamp': prev_msg.created_at.isoformat(),
-                     'feedback_comment': amsg.feedback_comment or '' 
+                     'feedback_comment': feedback_comment 
                  })
 
         return Response({
@@ -2357,7 +2452,7 @@ def feedback_details(request):
                 'chatbot_name': msg.session.chatbot.name if msg.session and msg.session.chatbot else 'Unknown',
                 'site_domain': msg.session.site.domain if msg.session and msg.session.site else 'Unknown',
                 'latency_ms': msg.latency_ms,
-                'comment': detailed_feedback.comment if detailed_feedback else None
+                'comment': None  # detailed_feedback.comment if detailed_feedback else None
             }
             feedback_entries.append(entry)
 

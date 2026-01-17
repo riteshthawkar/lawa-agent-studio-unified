@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,46 +8,69 @@
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f4f4f5;
-            color: #18181b;
+            background-color: #0a0a0b;
+            color: #fafafa;
             margin: 0;
             padding: 0;
-            line-height: 1.5;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
         }
+
         .container {
             max-width: 600px;
             margin: 0 auto;
             padding: 40px 20px;
         }
+
         .card {
-            background-color: #ffffff;
-            border-radius: 12px;
+            background-color: #18181b;
+            border-radius: 16px;
             padding: 40px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e4e4e7;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
+
         .logo {
             text-align: center;
             margin-bottom: 32px;
         }
+
         .logo h1 {
-            color: #18181b;
             font-size: 24px;
-            font-weight: 700;
+            font-weight: 800;
+            color: #ffffff;
             margin: 0;
+            letter-spacing: -0.5px;
         }
+
+        .logo-accent {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
         h2 {
             font-size: 20px;
-            font-weight: 600;
+            font-weight: 700;
             margin-top: 0;
             margin-bottom: 16px;
-            color: #18181b;
+            color: #ffffff;
         }
+
+        h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #d4d4d8;
+            margin-bottom: 8px;
+        }
+
         p {
-            color: #52525b;
+            color: #a1a1aa;
             margin-bottom: 16px;
             font-size: 16px;
         }
+
         .badge {
             display: inline-block;
             padding: 4px 12px;
@@ -55,165 +79,228 @@
             font-weight: 600;
             text-transform: uppercase;
         }
-        .badge-bug { background-color: #fee2e2; color: #991b1b; }
-        .badge-feature { background-color: #dbeafe; color: #1e40af; }
-        .badge-general { background-color: #e5e7eb; color: #374151; }
-        .badge-complaint { background-color: #fed7aa; color: #9a3412; }
-        .badge-praise { background-color: #d1fae5; color: #065f46; }
-        .badge-critical { background-color: #fee2e2; color: #991b1b; }
-        .badge-high { background-color: #fed7aa; color: #9a3412; }
-        .badge-medium { background-color: #dbeafe; color: #1e40af; }
-        .badge-low { background-color: #e5e7eb; color: #374151; }
+
+        .badge-bug {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+        }
+
+        .badge-feature {
+            background-color: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+
+        .badge-general {
+            background-color: rgba(113, 113, 122, 0.15);
+            color: #a1a1aa;
+        }
+
+        .badge-complaint {
+            background-color: rgba(245, 158, 11, 0.15);
+            color: #fcd34d;
+        }
+
+        .badge-praise {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+
+        .badge-critical {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+        }
+
+        .badge-high {
+            background-color: rgba(245, 158, 11, 0.2);
+            color: #fcd34d;
+        }
+
+        .badge-medium {
+            background-color: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+
+        .badge-low {
+            background-color: rgba(113, 113, 122, 0.15);
+            color: #a1a1aa;
+        }
+
         .info-box {
-            background-color: #f4f4f5;
-            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
             padding: 20px;
             margin: 24px 0;
         }
+
         .info-row {
-            display: flex;
-            margin-bottom: 12px;
+            display: block;
+            margin-bottom: 14px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         }
+
+        .info-row:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
         .info-label {
             font-weight: 600;
             color: #71717a;
-            width: 100px;
-            font-size: 14px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: block;
+            margin-bottom: 4px;
         }
+
         .info-value {
-            color: #18181b;
-            flex: 1;
+            color: #fafafa;
             font-size: 14px;
         }
+
         .message-box {
-            background-color: #fafafa;
+            background: rgba(59, 130, 246, 0.08);
             border-left: 4px solid #3b82f6;
             padding: 16px;
             margin: 24px 0;
-            border-radius: 0 8px 8px 0;
+            border-radius: 0 10px 10px 0;
         }
+
         .message-box p {
             margin: 0;
+            color: #d4d4d8;
             white-space: pre-wrap;
+            font-size: 14px;
         }
+
         .btn {
             display: inline-block;
-            padding: 12px 24px;
-            background-color: #18181b;
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
             color: #ffffff !important;
             text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
+            border-radius: 10px;
+            font-weight: 700;
             font-size: 14px;
             margin-top: 16px;
         }
+
         .footer {
             text-align: center;
             margin-top: 32px;
             font-size: 12px;
-            color: #a1a1aa;
+            color: #52525b;
         }
+
         .alert-critical {
-            background-color: #fee2e2;
-            border: 1px solid #fecaca;
-            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 10px;
             padding: 16px;
             margin-bottom: 24px;
             text-align: center;
         }
+
         .alert-critical p {
-            color: #991b1b;
-            font-weight: 600;
+            color: #fca5a5;
+            font-weight: 700;
             margin: 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="card">
             <div class="logo">
-                <h1>Lawa Webbotify</h1>
+                <h1><span class="logo-accent">Lawa</span> Agent Studio</h1>
             </div>
 
             {% if priority == 'critical' %}
             <div class="alert-critical">
-                <p>CRITICAL PRIORITY FEEDBACK</p>
+                <p>🚨 Critical Priority Feedback</p>
             </div>
             {% endif %}
 
-            <h2>New {{ feedback_type_display }} Received</h2>
+            <h2>📬 New {{ feedback_type_display }} Received</h2>
 
             <p>A new feedback submission requires your attention.</p>
 
             <div class="info-box">
                 <div class="info-row">
-                    <span class="info-label">Type:</span>
+                    <span class="info-label">Type</span>
                     <span class="info-value">
                         <span class="badge badge-{{ feedback_type }}">{{ feedback_type_display }}</span>
                     </span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">Priority:</span>
+                    <span class="info-label">Priority</span>
                     <span class="info-value">
                         <span class="badge badge-{{ priority }}">{{ priority }}</span>
                     </span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">From:</span>
+                    <span class="info-label">From</span>
                     <span class="info-value">{{ user_email }}</span>
                 </div>
                 {% if user_name %}
                 <div class="info-row">
-                    <span class="info-label">Name:</span>
+                    <span class="info-label">Name</span>
                     <span class="info-value">{{ user_name }}</span>
                 </div>
                 {% endif %}
                 {% if subject %}
                 <div class="info-row">
-                    <span class="info-label">Subject:</span>
+                    <span class="info-label">Subject</span>
                     <span class="info-value">{{ subject }}</span>
                 </div>
                 {% endif %}
                 <div class="info-row">
-                    <span class="info-label">Submitted:</span>
+                    <span class="info-label">Submitted</span>
                     <span class="info-value">{{ submitted_at }}</span>
                 </div>
             </div>
 
-            <h3 style="font-size: 16px; margin-bottom: 8px;">Message:</h3>
+            <h3>📝 Message</h3>
             <div class="message-box">
                 <p>{{ message }}</p>
             </div>
 
             {% if steps_to_reproduce %}
-            <h3 style="font-size: 16px; margin-bottom: 8px;">Steps to Reproduce:</h3>
+            <h3>🔄 Steps to Reproduce</h3>
             <div class="message-box">
                 <p>{{ steps_to_reproduce }}</p>
             </div>
             {% endif %}
 
             {% if expected_behavior %}
-            <h3 style="font-size: 16px; margin-bottom: 8px;">Expected Behavior:</h3>
+            <h3>✅ Expected Behavior</h3>
             <div class="message-box">
                 <p>{{ expected_behavior }}</p>
             </div>
             {% endif %}
 
             {% if actual_behavior %}
-            <h3 style="font-size: 16px; margin-bottom: 8px;">Actual Behavior:</h3>
+            <h3>❌ Actual Behavior</h3>
             <div class="message-box">
                 <p>{{ actual_behavior }}</p>
             </div>
             {% endif %}
 
             <div style="text-align: center;">
-                <a href="{{ admin_url }}" class="btn">View in Admin Panel</a>
+                <a href="{{ admin_url }}" class="btn">View in Admin Panel →</a>
             </div>
         </div>
 
         <div class="footer">
-            <p>&copy; {% now "Y" %} Lawa Webbotify. All rights reserved.</p>
+            <p>&copy; {% now "Y" %} Lawa Agent Studio. All rights reserved.</p>
         </div>
     </div>
 </body>
+
 </html>

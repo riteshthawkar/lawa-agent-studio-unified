@@ -99,12 +99,17 @@ services:
       # DB Credentials are read effectively from .env file now.
     command: uvicorn app:app --host 0.0.0.0 --port 8080 --workers 2
 
-  indexing-worker:
+  # ---------------------------------------------------------------------------
+  # INDEXING WORKERS - Split into priority queues for better resource management
+  # ---------------------------------------------------------------------------
+  # Worker 1: HIGH PRIORITY - Small/quick jobs (< 50 pages)
+  # Ensures small jobs complete quickly without being blocked by large jobs
+  indexing-worker-priority:
     build:
       context: .
       dockerfile: backends/indexing/Dockerfile
     image: lawa-indexing-service:latest
-    container_name: lawa-indexing-worker
+    container_name: lawa-indexing-worker-priority
     restart: always
     volumes:
       - shared_data:/app/data
@@ -119,14 +124,61 @@ services:
       - DATA_DIR=/app/data
       - REDIS_URL=redis://redis:6379/2
       - USE_CELERY_WORKER=True
-      - CELERY_WORKER_CONCURRENCY=5 # Optimized for 8GB RAM Droplet (5 workers * ~1GB + ~2GB Base System)
-      # DB Credentials are read effectively from .env file now.
-    command: celery -A celery_app worker -l info
+      - CELERY_WORKER_CONCURRENCY=2
+      # Per-job rate limiting: each job gets fair share of API quota
+      - GEMINI_RATE_LIMIT=120
+      - ENABLE_PER_JOB_RATE_LIMIT=True
+    command: celery -A celery_app worker -l info -Q indexing_priority,celery --hostname=priority@%h
     healthcheck:
       test: [ "CMD-SHELL", "celery -A celery_app inspect ping -d celery@$$HOSTNAME" ]
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 512M
+
+  # Worker 2: DEFAULT - Large/heavy jobs (>= 50 pages)
+  # Handles resource-intensive jobs without blocking priority queue
+  indexing-worker-default:
+    build:
+      context: .
+      dockerfile: backends/indexing/Dockerfile
+    image: lawa-indexing-service:latest
+    container_name: lawa-indexing-worker-default
+    restart: always
+    volumes:
+      - shared_data:/app/data
+      - ./backends/indexing:/app/website_indexing_backend
+      - ./backends/core:/app/core
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backends/indexing/.env
+    environment:
+      - DATA_DIR=/app/data
+      - REDIS_URL=redis://redis:6379/2
+      - USE_CELERY_WORKER=True
+      - CELERY_WORKER_CONCURRENCY=2
+      # Per-job rate limiting: each job gets fair share of API quota
+      - GEMINI_RATE_LIMIT=120
+      - ENABLE_PER_JOB_RATE_LIMIT=True
+    command: celery -A celery_app worker -l info -Q indexing_default,celery --hostname=default@%h
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A celery_app inspect ping -d celery@$$HOSTNAME" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 512M
 
   # ---------------------------------------------------------------------------
   # CHATBOT WIDGET BACKEND (Port 8002)

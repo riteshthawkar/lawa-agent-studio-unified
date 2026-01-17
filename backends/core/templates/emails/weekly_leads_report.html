@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Weekly Leads Report - {{ week_start|date:"M d" }} to {{ week_end|date:"M d, Y" }}</title>
+    <!--[if mso]>
+    <noscript>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    </noscript>
+    <![endif]-->
+    <style type="text/css">
+        /* Reset */
+        body, table, td, p, a, li, blockquote {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        table, td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+        img {
+            -ms-interpolation-mode: bicubic;
+            border: 0;
+            height: auto;
+            line-height: 100%;
+            outline: none;
+            text-decoration: none;
+        }
+
+        /* Base styles */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #0a0a0b;
+            color: #fafafa;
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .email-container {
+            max-width: 640px;
+            margin: 0 auto;
+            background-color: #0a0a0b;
+        }
+
+        /* Header with gradient */
+        .header-section {
+            background: linear-gradient(135deg, #18181b 0%, #1e1e24 50%, #18181b 100%);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 40px 32px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: -0.5px;
+            margin: 0 0 8px 0;
+        }
+
+        .logo-accent {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .report-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #ffffff;
+            margin: 24px 0 8px 0;
+        }
+
+        .report-period {
+            font-size: 15px;
+            color: #a1a1aa;
+            margin: 0;
+        }
+
+        .chatbot-badge {
+            display: inline-block;
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 12px;
+        }
+
+        /* Main content card */
+        .content-card {
+            background-color: #18181b;
+            margin: 24px 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .content-padding {
+            padding: 32px;
+        }
+
+        /* Metrics grid */
+        .metrics-section {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%);
+            padding: 24px;
+            border-radius: 12px;
+            margin-bottom: 32px;
+        }
+
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .metric-cell {
+            text-align: center;
+            padding: 16px 8px;
+            vertical-align: top;
+        }
+
+        .metric-value {
+            font-size: 36px;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 4px;
+        }
+
+        .metric-value-default { color: #ffffff; }
+        .metric-value-hot { color: #ef4444; }
+        .metric-value-warm { color: #f59e0b; }
+        .metric-value-cold { color: #64748b; }
+        .metric-value-sessions { color: #3b82f6; }
+
+        .metric-label {
+            font-size: 11px;
+            color: #71717a;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .trend-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-top: 8px;
+        }
+
+        .trend-up {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+
+        .trend-down {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+        }
+
+        .trend-flat {
+            background: rgba(113, 113, 122, 0.15);
+            color: #a1a1aa;
+        }
+
+        /* Stats row */
+        .stats-row {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 32px;
+        }
+
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .stat-cell {
+            text-align: center;
+            padding: 8px;
+        }
+
+        .stat-icon {
+            font-size: 20px;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #71717a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Section headers */
+        .section-header {
+            display: flex;
+            align-items: center;
+            margin: 32px 0 20px 0;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .section-icon {
+            font-size: 18px;
+            margin-right: 10px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffffff;
+            margin: 0;
+            letter-spacing: -0.3px;
+        }
+
+        .section-count {
+            background: rgba(255, 255, 255, 0.1);
+            color: #a1a1aa;
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        /* Lead cards */
+        .lead-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            border-left: 4px solid #3b82f6;
+        }
+
+        .lead-card-hot {
+            border-left-color: #ef4444;
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+        }
+
+        .lead-card-warm {
+            border-left-color: #f59e0b;
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+        }
+
+        .lead-card-cold {
+            border-left-color: #64748b;
+        }
+
+        .lead-header-table {
+            width: 100%;
+            margin-bottom: 12px;
+        }
+
+        .lead-intent {
+            font-size: 15px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .priority-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .priority-hot {
+            background: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+        }
+
+        .priority-warm {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fcd34d;
+        }
+
+        .priority-cold {
+            background: rgba(100, 116, 139, 0.2);
+            color: #94a3b8;
+        }
+
+        .lead-summary {
+            font-size: 14px;
+            color: #a1a1aa;
+            margin: 12px 0;
+            line-height: 1.5;
+        }
+
+        .lead-question {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin: 12px 0;
+            font-size: 13px;
+            color: #d4d4d8;
+            font-style: italic;
+            border-left: 2px solid rgba(59, 130, 246, 0.5);
+        }
+
+        .lead-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .meta-item {
+            font-size: 12px;
+            color: #71717a;
+        }
+
+        .meta-icon {
+            margin-right: 4px;
+        }
+
+        .meta-value {
+            color: #a1a1aa;
+            font-weight: 500;
+        }
+
+        /* Score display */
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+            padding: 4px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #a5b4fc;
+        }
+
+        /* AI Insights badge */
+        .ai-badge {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(236, 72, 153, 0.2) 100%);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #c4b5fd;
+            margin-left: 8px;
+        }
+
+        /* Buying signals */
+        .signals-container {
+            margin-top: 12px;
+        }
+
+        .signal-tag {
+            display: inline-block;
+            background: rgba(16, 185, 129, 0.15);
+            color: #6ee7b7;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            margin: 3px 4px 3px 0;
+        }
+
+        /* Intent breakdown */
+        .intent-bar-container {
+            margin: 12px 0;
+        }
+
+        .intent-row {
+            margin-bottom: 16px;
+        }
+
+        .intent-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+
+        .intent-name {
+            font-size: 13px;
+            color: #d4d4d8;
+            font-weight: 500;
+        }
+
+        .intent-count {
+            font-size: 13px;
+            color: #71717a;
+        }
+
+        .intent-track {
+            background: rgba(255, 255, 255, 0.1);
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .intent-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 100%);
+        }
+
+        /* Geographic distribution */
+        .geo-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .geo-row td {
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .geo-country {
+            font-size: 14px;
+            color: #d4d4d8;
+        }
+
+        .geo-flag {
+            margin-right: 8px;
+        }
+
+        .geo-count {
+            text-align: right;
+            font-size: 14px;
+            font-weight: 600;
+            color: #a1a1aa;
+        }
+
+        /* Questions list */
+        .questions-list {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .question-item {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+            font-size: 13px;
+            color: #d4d4d8;
+            border-left: 3px solid rgba(59, 130, 246, 0.4);
+        }
+
+        .question-icon {
+            color: #60a5fa;
+            margin-right: 8px;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            text-align: center;
+            padding: 32px 0;
+            margin-top: 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .cta-text {
+            font-size: 15px;
+            color: #a1a1aa;
+            margin-bottom: 20px;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 16px 40px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .cta-button:hover {
+            opacity: 0.9;
+        }
+
+        /* Footer */
+        .footer-section {
+            text-align: center;
+            padding: 32px;
+            color: #52525b;
+            font-size: 12px;
+        }
+
+        .footer-links a {
+            color: #71717a;
+            text-decoration: underline;
+        }
+
+        .footer-brand {
+            font-weight: 600;
+            color: #71717a;
+            margin-top: 16px;
+        }
+
+        /* No leads state */
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+        }
+
+        .empty-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 12px;
+        }
+
+        .empty-text {
+            font-size: 14px;
+            color: #71717a;
+            max-width: 320px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Insights mode alternative header */
+        .insights-header {
+            background: linear-gradient(135deg, #10b981 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Responsive */
+        @media screen and (max-width: 600px) {
+            .content-padding {
+                padding: 24px 16px;
+            }
+
+            .metric-value {
+                font-size: 28px;
+            }
+
+            .header-section {
+                padding: 32px 20px;
+            }
+
+            .report-title {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <!-- Header Section -->
+        <div class="header-section">
+            <h1 class="logo">
+                <span class="logo-accent">Lawa</span> Agent Studio
+            </h1>
+            <h2 class="report-title">Weekly Insights Report</h2>
+            <p class="report-period">
+                {{ week_start|date:"F d" }} - {{ week_end|date:"F d, Y" }}
+            </p>
+            {% if chatbot_name and chatbot_name != "All Chatbots" %}
+            <span class="chatbot-badge">{{ chatbot_name }}</span>
+            {% endif %}
+        </div>
+
+        <!-- Main Content Card -->
+        <div class="content-card">
+            <div class="content-padding">
+
+                {% if total_leads > 0 %}
+                <!-- Metrics Section -->
+                <div class="metrics-section">
+                    <table class="metrics-table" role="presentation">
+                        <tr>
+                            <td class="metric-cell">
+                                <div class="metric-value metric-value-default">{{ total_leads }}</div>
+                                <div class="metric-label">Total Leads</div>
+                                {% if leads_trend == 'up' %}
+                                <span class="trend-badge trend-up">&#8593; {{ leads_change_percent|floatformat:0 }}%</span>
+                                {% elif leads_trend == 'down' %}
+                                <span class="trend-badge trend-down">&#8595; {{ leads_change_percent|floatformat:0 }}%</span>
+                                {% else %}
+                                <span class="trend-badge trend-flat">&#8596; No change</span>
+                                {% endif %}
+                            </td>
+                            <td class="metric-cell">
+                                <div class="metric-value metric-value-hot">{{ hot_leads }}</div>
+                                <div class="metric-label">Hot Leads</div>
+                            </td>
+                            <td class="metric-cell">
+                                <div class="metric-value metric-value-warm">{{ warm_leads }}</div>
+                                <div class="metric-label">Warm Leads</div>
+                            </td>
+                            <td class="metric-cell">
+                                <div class="metric-value metric-value-sessions">{{ total_sessions }}</div>
+                                <div class="metric-label">Sessions</div>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Additional Stats -->
+                <div class="stats-row">
+                    <table class="stats-table" role="presentation">
+                        <tr>
+                            <td class="stat-cell">
+                                <div class="stat-icon">&#128172;</div>
+                                <div class="stat-value">{{ avg_messages|floatformat:1 }}</div>
+                                <div class="stat-label">Avg Messages</div>
+                            </td>
+                            <td class="stat-cell">
+                                <div class="stat-icon">&#9201;</div>
+                                <div class="stat-value">{{ avg_session_duration|floatformat:0 }}s</div>
+                                <div class="stat-label">Avg Duration</div>
+                            </td>
+                            <td class="stat-cell">
+                                <div class="stat-icon">&#128077;</div>
+                                <div class="stat-value">{{ feedback_summary.positive|default:0 }}</div>
+                                <div class="stat-label">Positive</div>
+                            </td>
+                            <td class="stat-cell">
+                                <div class="stat-icon">&#128078;</div>
+                                <div class="stat-value">{{ feedback_summary.negative|default:0 }}</div>
+                                <div class="stat-label">Negative</div>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Top Leads Section -->
+                {% if top_leads %}
+                <table width="100%" role="presentation" style="margin-bottom: 24px;">
+                    <tr>
+                        <td>
+                            <span class="section-icon">&#127919;</span>
+                            <span class="section-title">Top Leads This Week</span>
+                        </td>
+                        <td style="text-align: right;">
+                            <span class="section-count">{{ top_leads|length }}</span>
+                        </td>
+                    </tr>
+                </table>
+
+                {% for lead in top_leads %}
+                <div class="lead-card lead-card-{{ lead.priority }}">
+                    <table class="lead-header-table" role="presentation">
+                        <tr>
+                            <td>
+                                <span class="lead-intent">{{ lead.detected_intent|default:"General Inquiry"|title }}</span>
+                                {% if lead.has_llm_insights %}
+                                <span class="ai-badge">&#10024; AI</span>
+                                {% endif %}
+                            </td>
+                            <td style="text-align: right;">
+                                <span class="priority-badge priority-{{ lead.priority }}">{{ lead.priority|upper }}</span>
+                                <span class="score-badge" style="margin-left: 8px;">Score: {{ lead.total_score }}</span>
+                            </td>
+                        </tr>
+                    </table>
+
+                    {% if lead.conversation_summary %}
+                    <p class="lead-summary">{{ lead.conversation_summary|truncatechars:180 }}</p>
+                    {% endif %}
+
+                    {% if lead.key_questions %}
+                    <div class="lead-question">
+                        "{{ lead.key_questions.0|truncatechars:150 }}"
+                    </div>
+                    {% endif %}
+
+                    {% if lead.buying_signals %}
+                    <div class="signals-container">
+                        {% for signal in lead.buying_signals|slice:":4" %}
+                        <span class="signal-tag">&#10003; {{ signal }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    <table class="lead-meta" role="presentation" style="width: 100%;">
+                        <tr>
+                            {% if lead.geo_location %}
+                            <td class="meta-item">
+                                <span class="meta-icon">&#128205;</span>
+                                <span class="meta-value">{{ lead.geo_location }}</span>
+                            </td>
+                            {% endif %}
+                            {% if lead.device_type %}
+                            <td class="meta-item">
+                                <span class="meta-icon">{% if lead.device_type == "mobile" %}&#128241;{% else %}&#128187;{% endif %}</span>
+                                <span class="meta-value">{{ lead.device_type|title }}</span>
+                            </td>
+                            {% endif %}
+                            {% if lead.company_name %}
+                            <td class="meta-item">
+                                <span class="meta-icon">&#127970;</span>
+                                <span class="meta-value">{{ lead.company_name }}</span>
+                            </td>
+                            {% endif %}
+                        </tr>
+                    </table>
+                </div>
+                {% endfor %}
+                {% endif %}
+
+                <!-- Intent Breakdown -->
+                {% if intent_breakdown %}
+                <table width="100%" role="presentation" style="margin: 32px 0 20px 0; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <tr>
+                        <td>
+                            <span class="section-icon">&#127919;</span>
+                            <span class="section-title">Intent Breakdown</span>
+                        </td>
+                    </tr>
+                </table>
+
+                <div class="intent-bar-container">
+                    {% for item in intent_breakdown %}
+                    <div class="intent-row">
+                        <table width="100%" role="presentation">
+                            <tr>
+                                <td class="intent-name">{{ item.name|title }}</td>
+                                <td class="intent-count" style="text-align: right;">{{ item.count }} ({{ item.percent }}%)</td>
+                            </tr>
+                        </table>
+                        <div class="intent-track">
+                            <div class="intent-fill" style="width: {{ item.percent }}%;"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Geographic Distribution -->
+                {% if geo_distribution %}
+                <table width="100%" role="presentation" style="margin: 32px 0 20px 0; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <tr>
+                        <td>
+                            <span class="section-icon">&#127758;</span>
+                            <span class="section-title">Audience Reach</span>
+                        </td>
+                    </tr>
+                </table>
+
+                <table class="geo-table" role="presentation">
+                    {% for country, count in geo_distribution %}
+                    <tr class="geo-row">
+                        <td class="geo-country">
+                            <span class="geo-flag">&#127760;</span> {{ country }}
+                        </td>
+                        <td class="geo-count">{{ count }} visitors</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% endif %}
+
+                <!-- Top Questions -->
+                {% if top_questions %}
+                <table width="100%" role="presentation" style="margin: 32px 0 20px 0; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                    <tr>
+                        <td>
+                            <span class="section-icon">&#10067;</span>
+                            <span class="section-title">Common Questions</span>
+                        </td>
+                    </tr>
+                </table>
+
+                <ul class="questions-list">
+                    {% for question in top_questions %}
+                    <li class="question-item">
+                        <span class="question-icon">&#10148;</span>
+                        {{ question|truncatechars:120 }}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+
+                {% else %}
+                <!-- Empty State -->
+                <div class="empty-state">
+                    <div class="empty-icon">&#128202;</div>
+                    <h3 class="empty-title">No leads this week</h3>
+                    <p class="empty-text">
+                        Leads are identified from chat conversations with high-intent signals like pricing inquiries, demo requests, and contact information sharing.
+                    </p>
+                </div>
+                {% endif %}
+
+                <!-- CTA Section -->
+                <div class="cta-section">
+                    <p class="cta-text">View detailed analytics and manage your leads</p>
+                    <a href="{{ dashboard_url }}" class="cta-button">Open Dashboard &#8594;</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer-section">
+            <p class="footer-links">
+                You're receiving this because you have weekly reports enabled.<br>
+                <a href="{{ settings_url }}">Manage preferences</a> &nbsp;&#8226;&nbsp;
+                <a href="{{ unsubscribe_url }}">Unsubscribe</a>
+            </p>
+            <p class="footer-brand">&copy; {{ current_year }} Lawa Agent Studio. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

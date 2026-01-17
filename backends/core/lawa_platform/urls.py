@@ -23,6 +23,7 @@ urlpatterns = [
     path('v1/', include([
         path('auth/', include('apps.auth.urls')),
         path('frontend/', include('apps.frontend.urls')),
+        path('frontend/analytics/', include('apps.analytics.urls')),
         path('support/', include('apps.support.urls')),
         path('payments/', include('apps.payments.urls')),
         path('admin/', include('apps.admin_api.urls')),

@@ -24,6 +24,10 @@ TIER_FEATURES = {
             'core_stats',
             'daily_chart',
             'smart_insights_basic',
+            # Lead Analytics - Basic
+            'leads_basic_list',           # View leads with priority (hot/warm/cold)
+            'leads_basic_stats',          # Total leads count, basic breakdown
+            'leads_rule_based_scoring',   # Rule-based scoring only
         ],
         'limits': {
             'sites': 1,
@@ -31,6 +35,7 @@ TIER_FEATURES = {
             'daily_conversations': 100,
             'max_conversations': 5000,
             'pages_per_site': 50,
+            'leads_per_page': 10,         # Pagination limit
         }
     },
     'premium': {
@@ -64,6 +69,22 @@ TIER_FEATURES = {
             'scheduled_reports_weekly',
             'api_access_readonly',
             'priority_support',
+            # Lead Analytics - Premium
+            'leads_basic_list',
+            'leads_basic_stats',
+            'leads_rule_based_scoring',
+            'leads_detailed_view',        # Full lead detail dialog
+            'leads_intent_analysis',      # Intent detection & breakdown
+            'leads_key_questions',        # Key questions extracted
+            'leads_conversation_summary', # AI-generated summaries
+            'leads_geo_distribution',     # Geographic distribution of leads
+            'leads_device_breakdown',     # Device type breakdown
+            'leads_source_analysis',      # Which pages generate leads
+            'leads_trend_charts',         # Daily/weekly lead trends
+            'leads_priority_breakdown',   # Hot/warm/cold distribution charts
+            'leads_weekly_reports',       # Weekly email reports
+            'leads_export',               # Export leads to CSV/JSON
+            'leads_chatbot_comparison',   # Compare lead quality across chatbots
         ],
         'limits': {
             'sites': 10,
@@ -71,6 +92,7 @@ TIER_FEATURES = {
             'daily_conversations': 1000,
             'max_conversations': -1,  # Unlimited
             'pages_per_site': 500,
+            'leads_per_page': 50,         # Pagination limit
         }
     },
     'enterprise': {
@@ -107,6 +129,28 @@ TIER_FEATURES = {
             'dedicated_support',
             'sla_guarantee',
             'custom_integrations',
+            # Lead Analytics - Enterprise (AI-Powered)
+            'leads_llm_scoring',          # LLM-powered lead scoring
+            'leads_ai_insights',          # Full AI insights panel
+            'leads_entity_extraction',    # Company, role, team size, industry
+            'leads_buying_signals',       # Buying signals detection
+            'leads_objections_detection', # Objections/concerns detection
+            'leads_sentiment_analysis',   # Per-lead sentiment analysis
+            'leads_urgency_detection',    # Urgency level detection
+            'leads_competitor_mentions',  # Competitor mention tracking
+            'leads_ai_recommendations',   # AI follow-up recommendations
+            'leads_talking_points',       # AI-generated talking points
+            'leads_content_gaps',         # Content gap identification
+            'leads_predictive_scoring',   # Predictive lead quality
+            'leads_conversion_tracking',  # Track lead conversions
+            'leads_quality_trends',       # Lead quality trends over time
+            'leads_score_distribution',   # Score distribution histogram
+            'leads_top_patterns',         # Top performing conversation patterns
+            'leads_daily_reports',        # Daily email reports
+            'leads_custom_scoring_rules', # Custom scoring rule configuration
+            'leads_api_access',           # Full API access to leads
+            'leads_webhook_notifications', # Webhook for hot leads
+            'leads_crm_integration',      # CRM integrations (Salesforce, HubSpot)
         ],
         'limits': {
             'sites': -1,  # Unlimited
@@ -114,6 +158,7 @@ TIER_FEATURES = {
             'daily_conversations': -1,  # Unlimited
             'max_conversations': -1,  # Unlimited
             'pages_per_site': -1,  # Unlimited
+            'leads_per_page': -1,  # Unlimited
         }
     }
 }

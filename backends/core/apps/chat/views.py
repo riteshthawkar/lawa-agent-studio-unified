@@ -36,7 +36,13 @@ class ChatSessionViewSet(BaseViewSet):
         Get chat sessions for the current user's organization.
         Sessions are linked to sites via site_id, and sites have org_id.
         We filter sessions by joining through site to match org_id.
+
+        Query params:
+        - days: Filter sessions from last N days (default: no filter)
+        - limit: Override pagination limit (max 1000)
         """
+        from datetime import timedelta
+        from django.utils import timezone
         request = self.request
 
         # Get user's organizations
@@ -47,8 +53,37 @@ class ChatSessionViewSet(BaseViewSet):
         # This prevents leaking all sessions if org_id is missing from request
         queryset = self.queryset.filter(site__org_id__in=user_orgs.values('id'))
 
+        # Filter by days if specified
+        days = request.query_params.get('days')
+        if days:
+            try:
+                days = int(days)
+                start_date = timezone.now() - timedelta(days=days)
+                queryset = queryset.filter(started_at__gte=start_date)
+            except (ValueError, TypeError):
+                pass
+
         # Order by most recent first
         return queryset.select_related('site', 'chatbot').order_by('-started_at')
+
+    def list(self, request, *args, **kwargs):
+        """Override list to support custom limit parameter."""
+        # Check if custom limit is requested
+        limit = request.query_params.get('limit')
+        if limit:
+            try:
+                limit = min(int(limit), 1000)  # Cap at 1000
+                queryset = self.filter_queryset(self.get_queryset())[:limit]
+                serializer = self.get_serializer(queryset, many=True)
+                return Response({
+                    'results': serializer.data,
+                    'count': len(serializer.data)
+                })
+            except (ValueError, TypeError):
+                pass
+
+        # Default pagination behavior
+        return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         """Create new chat session"""
@@ -80,13 +115,19 @@ class ChatSessionViewSet(BaseViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        # Extract referrer from request or meta
+        referrer = request.data.get('referrer')
+        if not referrer and meta:
+            referrer = meta.get('page_url') or meta.get('referrer')
+
         # Create session
         chatbot_service = ChatbotService()
         session = chatbot_service.create_session(
             chatbot=chatbot,
             site=site,
             user_id=request.user.id if request.user.is_authenticated else None,
-            meta=meta
+            meta=meta,
+            referrer=referrer
         )
 
         return Response({
@@ -205,7 +246,6 @@ def submit_feedback(request, message_id):
     
     feedback_data = serializer.validated_data
     feedback_type = feedback_data['feedback_type']
-    comment = feedback_data.get('comment', '')
     
     # Get client info
     client_ip = get_client_ip(request)
@@ -220,7 +260,6 @@ def submit_feedback(request, message_id):
             ip_address=client_ip if not user_id else None,
             defaults={
                 'feedback_type': feedback_type,
-                'comment': comment,
                 'user_agent': user_agent
             }
         )

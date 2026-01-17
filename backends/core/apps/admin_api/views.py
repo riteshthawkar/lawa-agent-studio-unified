@@ -1,7 +1,8 @@
 from rest_framework import viewsets, views, status, filters
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
 from django.conf import settings
@@ -22,7 +23,8 @@ from apps.admin_api.serializers import (
     FeedbackListSerializer, FeedbackDetailSerializer, FeedbackUpdateSerializer,
     FAQCategorySerializer, FAQCategoryCreateUpdateSerializer,
     FAQSerializer, FAQCreateUpdateSerializer,
-    HelpArticleListSerializer, HelpArticleDetailSerializer, HelpArticleCreateUpdateSerializer
+    HelpArticleListSerializer, HelpArticleDetailSerializer, HelpArticleCreateUpdateSerializer,
+    AdminLoginSerializer, AdminUserSerializer
 )
 from apps.auth.models import User
 from apps.organizations.models import Organization
@@ -41,6 +43,126 @@ from io import StringIO
 from django.http import HttpResponse
 
 logger = logging.getLogger(__name__)
+
+
+# =====================
+# Admin Authentication
+# =====================
+
+def get_client_ip(request):
+    """Extract client IP from request"""
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_login(request):
+    """
+    Admin-only login endpoint.
+
+    POST /v1/admin/auth/login/
+
+    This endpoint validates credentials AND admin status BEFORE issuing tokens.
+    Non-admin users will be rejected with 403 Forbidden.
+
+    Request body:
+        - email: Admin email
+        - password: Admin password
+
+    Returns:
+        - user: Admin user details
+        - tokens: JWT access and refresh tokens
+        - is_admin: Always true for successful login
+    """
+    serializer = AdminLoginSerializer(data=request.data)
+
+    # Get client info for audit logging
+    client_ip = get_client_ip(request)
+    user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+
+    if not serializer.is_valid():
+        # Log failed login attempt
+        email = request.data.get('email', 'unknown')
+        logger.warning(
+            f"Admin login failed for {email} from {client_ip}",
+            extra={'email': email, 'ip': client_ip, 'errors': serializer.errors}
+        )
+
+        # Try to find user for login history (even if login failed)
+        try:
+            user = User.objects.get(email=email)
+            LoginHistory.objects.create(
+                user=user,
+                success=False,
+                ip_address=client_ip,
+                user_agent=user_agent
+            )
+        except User.DoesNotExist:
+            pass
+
+        # Return generic error message (don't reveal if user exists)
+        error_message = 'Invalid credentials or insufficient privileges'
+        if 'non_field_errors' in serializer.errors:
+            error_message = serializer.errors['non_field_errors'][0]
+
+        return Response(
+            {'error': error_message},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    user = serializer.validated_data['user']
+
+    # Generate JWT tokens
+    refresh = RefreshToken.for_user(user)
+    access_token = refresh.access_token
+
+    # Add admin flag to token
+    access_token['is_admin'] = True
+    access_token['is_superuser'] = user.is_superuser
+    access_token['is_staff'] = user.is_staff
+
+    # Log successful admin login
+    logger.info(
+        f"Admin login successful for {user.email} from {client_ip}",
+        extra={'user_id': str(user.id), 'email': user.email, 'ip': client_ip}
+    )
+
+    # Record login history
+    LoginHistory.objects.create(
+        user=user,
+        success=True,
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+
+    # Create audit log entry
+    AdminAuditLog.objects.create(
+        admin=user,
+        admin_email=user.email,
+        action='system.config_change',  # Use existing action type for admin login
+        target_type='user',
+        target_id=str(user.id),
+        target_label=user.email,
+        ip_address=client_ip,
+        user_agent=user_agent,
+        details={'login_method': 'admin_portal', 'action': 'admin_login'}
+    )
+
+    # Update last login
+    user.last_login = timezone.now()
+    user.save(update_fields=['last_login'])
+
+    return Response({
+        'user': AdminUserSerializer(user).data,
+        'tokens': {
+            'access': str(access_token),
+            'refresh': str(refresh),
+        },
+        'is_admin': True
+    })
 
 
 class AdminStatsViews(viewsets.ViewSet):
@@ -1928,3 +2050,346 @@ def help_center_stats(request):
     )
 
     return Response(stats)
+
+
+# =====================
+# Admin Leads Dashboard
+# =====================
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def admin_leads_dashboard(request):
+    """
+    GET /v1/admin/leads/
+    
+    Platform-wide leads dashboard for admins.
+    Shows leads across ALL organizations.
+    
+    Query params:
+    - days: Number of days to look back (default 30)
+    - org_id: Filter by specific organization
+    - chatbot_id: Filter by specific chatbot
+    - priority: Filter by priority (hot, warm, cold)
+    - limit: Number of leads to return (default 50)
+    - offset: Pagination offset
+    """
+    from django.db.models import Count, Avg, Q, Case, When, Value, CharField
+    from django.utils import timezone
+    from datetime import timedelta
+    from apps.analytics.models import LeadScore
+    from apps.organizations.models import Organization
+    from apps.analytics.serializers import LeadScoreListSerializer
+    
+    try:
+        # Parse query params - no tier restrictions for admin
+        days = int(request.query_params.get('days', 30))
+        org_id = request.query_params.get('org_id')
+        chatbot_id = request.query_params.get('chatbot_id')
+        priority = request.query_params.get('priority')
+        limit = int(request.query_params.get('limit', 50))
+        offset = int(request.query_params.get('offset', 0))
+        
+        # Calculate date range
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        # Base queryset - ALL leads platform-wide
+        leads_qs = LeadScore.objects.filter(
+            session_date__gte=start_date,
+            session_date__lte=end_date
+        ).select_related('chatbot', 'session', 'org')
+        
+        # Apply optional filters
+        if org_id:
+            leads_qs = leads_qs.filter(org_id=org_id)
+        if chatbot_id:
+            leads_qs = leads_qs.filter(chatbot_id=chatbot_id)
+        if priority:
+            leads_qs = leads_qs.filter(priority=priority)
+        
+        # Get summary counts
+        summary_qs = leads_qs.values('priority').annotate(count=Count('id'))
+        summary = {
+            'total': 0,
+            'hot': 0,
+            'warm': 0,
+            'cold': 0,
+            'period_days': days,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat(),
+        }
+        for item in summary_qs:
+            summary[item['priority']] = item['count']
+            summary['total'] += item['count']
+        
+        # Count AI-analyzed leads
+        summary['ai_analyzed'] = leads_qs.filter(llm_insights__isnull=False).count()
+        
+        # Get intent breakdown
+        intent_breakdown = list(
+            leads_qs.exclude(detected_intent__isnull=True)
+            .values('detected_intent')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+        
+        # Get daily trend
+        daily_trend = {}
+        daily_data = list(
+            leads_qs.values('session_date', 'priority')
+            .annotate(count=Count('id'))
+            .order_by('session_date')
+        )
+        for item in daily_data:
+            date_key = item['session_date'].isoformat()
+            if date_key not in daily_trend:
+                daily_trend[date_key] = {'date': date_key, 'total': 0, 'hot': 0, 'warm': 0, 'cold': 0}
+            daily_trend[date_key][item['priority']] = item['count']
+            daily_trend[date_key]['total'] += item['count']
+        
+        # Get geo distribution
+        geo_distribution = dict(
+            leads_qs.exclude(geo_location__isnull=True)
+            .exclude(geo_location='')
+            .values_list('geo_location')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+        
+        # Get device breakdown
+        device_breakdown = dict(
+            leads_qs.values_list('device_type')
+            .annotate(count=Count('id'))
+        )
+        
+        # Get organization breakdown (admin-specific)
+        org_breakdown = list(
+            leads_qs.values('org__name', 'org_id')
+            .annotate(
+                total=Count('id'),
+                hot=Count('id', filter=Q(priority='hot')),
+                warm=Count('id', filter=Q(priority='warm')),
+                cold=Count('id', filter=Q(priority='cold')),
+                avg_score=Avg('total_score')
+            )
+            .order_by('-total')[:10]
+        )
+        
+        # Get chatbot comparison
+        chatbot_comparison = list(
+            leads_qs.values('chatbot__id', 'chatbot__name')
+            .annotate(
+                total=Count('id'),
+                hot=Count('id', filter=Q(priority='hot')),
+                warm=Count('id', filter=Q(priority='warm')),
+                avg_score=Avg('total_score')
+            )
+            .order_by('-total')[:10]
+        )
+        
+        # Get score distribution
+        score_distribution = list(
+            leads_qs.annotate(
+                score_bucket=Case(
+                    When(total_score__lte=20, then=Value('0-20')),
+                    When(total_score__lte=40, then=Value('21-40')),
+                    When(total_score__lte=60, then=Value('41-60')),
+                    When(total_score__lte=80, then=Value('61-80')),
+                    default=Value('81-100'),
+                    output_field=CharField(),
+                )
+            ).values('score_bucket').annotate(count=Count('id')).order_by('score_bucket')
+        )
+        
+        # Get quality trends
+        quality_data = list(
+            leads_qs.values('session_date')
+            .annotate(
+                avg_score=Avg('total_score'),
+                total=Count('id'),
+                hot_count=Count('id', filter=Q(priority='hot'))
+            )
+            .order_by('session_date')
+        )
+        quality_trends = []
+        for item in quality_data:
+            hot_rate = (item['hot_count'] / item['total'] * 100) if item['total'] > 0 else 0
+            quality_trends.append({
+                'date': item['session_date'].isoformat(),
+                'avg_score': round(item['avg_score'] or 0, 1),
+                'hot_rate': round(hot_rate, 1)
+            })
+        
+        # Get paginated leads with org info
+        leads = leads_qs.order_by('-total_score')[offset:offset + limit]
+        leads_data = LeadScoreListSerializer(leads, many=True).data
+        
+        # Add org name to each lead
+        for i, lead in enumerate(leads):
+            if lead.org:
+                leads_data[i]['organization'] = {
+                    'id': str(lead.org.id),
+                    'name': lead.org.name
+                }
+        
+        return Response({
+            'summary': summary,
+            'leads': leads_data,
+            'intent_breakdown': intent_breakdown,
+            'daily_trend': list(daily_trend.values()),
+            'geo_distribution': geo_distribution,
+            'device_breakdown': device_breakdown,
+            'org_breakdown': org_breakdown,
+            'chatbot_comparison': chatbot_comparison,
+            'score_distribution': score_distribution,
+            'quality_trends': quality_trends,
+            'pagination': {
+                'limit': limit,
+                'offset': offset,
+                'total': summary['total'],
+                'page': (offset // limit) + 1 if limit > 0 else 1,
+                'total_pages': (summary['total'] + limit - 1) // limit if limit > 0 else 1,
+            },
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in admin_leads_dashboard: {e}", exc_info=True)
+        return Response(
+            {'error': 'Failed to fetch leads data'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def admin_query_analytics(request):
+    """
+    GET /v1/admin/leads/queries/
+    
+    Platform-wide query analytics for admins.
+    Shows what users are asking across all organizations.
+    """
+    from django.db.models import Count, Q
+    from django.utils import timezone
+    from datetime import timedelta
+    from apps.chat.models import ChatMessage, ChatSession
+    
+    try:
+        days = int(request.query_params.get('days', 30))
+        org_id = request.query_params.get('org_id')
+        limit = int(request.query_params.get('limit', 20))
+        
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Get user messages (questions)
+        messages_qs = ChatMessage.objects.filter(
+            role='user',
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        ).select_related('session')
+        
+        if org_id:
+            messages_qs = messages_qs.filter(session__org_id=org_id)
+        
+        # Get top queries
+        top_queries = list(
+            messages_qs.values('content')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:limit]
+        )
+        
+        # Get query categories
+        categories = list(
+            messages_qs.exclude(query_category__isnull=True)
+            .exclude(query_category='')
+            .values('query_category')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+        
+        # Get unanswered queries (those with dislike feedback)
+        unanswered = list(
+            messages_qs.filter(
+                session__messages__role='assistant',
+                session__messages__feedback='dislike'
+            ).values('content')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+        
+        return Response({
+            'top_queries': top_queries,
+            'categories': categories,
+            'unanswered_queries': unanswered,
+            'total_queries': messages_qs.count(),
+            'period_days': days,
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in admin_query_analytics: {e}", exc_info=True)
+        return Response(
+            {'error': 'Failed to fetch query analytics'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def admin_geo_analytics(request):
+    """
+    GET /v1/admin/leads/geo/
+    
+    Platform-wide geographic analytics for admins.
+    """
+    from django.db.models import Count
+    from django.utils import timezone
+    from datetime import timedelta
+    from apps.chat.models import ChatSession
+    
+    try:
+        days = int(request.query_params.get('days', 30))
+        org_id = request.query_params.get('org_id')
+        
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=days)
+        
+        sessions_qs = ChatSession.objects.filter(
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        
+        if org_id:
+            sessions_qs = sessions_qs.filter(org_id=org_id)
+        
+        # Get country distribution
+        countries = list(
+            sessions_qs.exclude(geo_country_code__isnull=True)
+            .exclude(geo_country_code='')
+            .values('geo_country_code', 'geo_country_name')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:20]
+        )
+        
+        # Sessions with geo data
+        sessions_with_geo = sessions_qs.exclude(geo_country_code__isnull=True).exclude(geo_country_code='').count()
+        total_sessions = sessions_qs.count()
+        
+        return Response({
+            'countries': countries,
+            'geo_stats': {
+                'sessions_with_geo': sessions_with_geo,
+                'total_sessions': total_sessions,
+                'geo_coverage': round(sessions_with_geo / total_sessions * 100, 1) if total_sessions > 0 else 0,
+                'unique_countries': len(countries),
+            },
+            'period_days': days,
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in admin_geo_analytics: {e}", exc_info=True)
+        return Response(
+            {'error': 'Failed to fetch geo analytics'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

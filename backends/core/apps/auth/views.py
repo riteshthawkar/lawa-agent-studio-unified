@@ -13,6 +13,8 @@ from .serializers import (
     APIKeyListSerializer,
     VerifyEmailSerializer,
     ResendOTPSerializer,
+    ForgotPasswordSerializer,
+    ResetPasswordSerializer,
     UserPreferencesSerializer,
     UserFeedbackSerializer,
     SupportRequestSerializer
@@ -179,6 +181,97 @@ class VerifyEmailView(generics.GenericAPIView):
             return Response(
                 {'error': 'User not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class ForgotPasswordView(generics.GenericAPIView):
+    """
+    Request password reset OTP
+    POST /v1/auth/password/forgot/
+    """
+    serializer_class = ForgotPasswordSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        email = serializer.validated_data['email']
+        
+        try:
+            user = User.objects.get(email=email)
+            
+            # Send password reset email
+            auth_service = AuthenticationService()
+            try:
+                auth_service.send_verification_and_create_record(
+                    email=email,
+                    user=user,
+                    email_type='password_reset'
+                )
+            except Exception as e:
+                # Specific check for local SSL issues (Certifi/Dev Envs)
+                if "CERTIFICATE_VERIFY_FAILED" in str(e):
+                    logger.warning(f"Swallowed SSL error during email sending: {str(e)}")
+                else:
+                    logger.error(f"Failed to send password reset email: {str(e)}")
+                    return Response(
+                        {'error': 'Failed to send reset email'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+        except User.DoesNotExist:
+            # Don't reveal user existence
+            pass
+            
+        return Response({'message': 'If an account exists with this email, a password reset code has been sent.'})
+
+
+class ResetPasswordView(generics.GenericAPIView):
+    """
+    Reset password using OTP
+    POST /v1/auth/password/reset/
+    """
+    serializer_class = ResetPasswordSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        email = serializer.validated_data['email']
+        otp = serializer.validated_data['otp']
+        new_password = serializer.validated_data['new_password']
+        
+        try:
+            # Verify OTP
+            auth_service = AuthenticationService()
+            # Note: verify_otp raises EmailVerification.DoesNotExist if invalid
+            auth_service.verify_otp(email, otp)
+            
+            # Update user password
+            user = User.objects.get(email=email)
+            user.set_password(new_password)
+            user.save()
+            
+            # Allow user to log in immediately with new password
+            return Response({'message': 'Password reset successfully. You can now log in.'})
+            
+        except EmailVerification.DoesNotExist:
+            return Response(
+                {'error': 'Invalid or expired verification code'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Password reset failed: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Failed to reset password'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 

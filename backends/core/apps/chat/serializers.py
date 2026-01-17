@@ -56,7 +56,7 @@ class ChatFeedbackSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatFeedback
         fields = (
-            'id', 'message', 'feedback_type', 'user_id', 'comment',
+            'id', 'message', 'feedback_type', 'user_id',
             'ip_address', 'user_agent', 'created_at'
         )
         read_only_fields = ('id', 'user_id', 'ip_address', 'user_agent', 'created_at')
@@ -88,7 +88,7 @@ class ChatFeedbackSerializer(serializers.ModelSerializer):
 class FeedbackUpdateSerializer(serializers.Serializer):
     """Serializer for updating feedback on a message"""
     feedback_type = serializers.ChoiceField(choices=['like', 'dislike'])
-    comment = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    feedback_type = serializers.ChoiceField(choices=['like', 'dislike'])
     
     def validate_feedback_type(self, value):
         """Validate feedback type"""

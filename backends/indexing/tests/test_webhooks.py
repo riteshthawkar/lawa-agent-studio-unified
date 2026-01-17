@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app import send_webhook_callback, send_progress_webhook
+from modules.webhooks import send_webhook_callback, send_progress_webhook
 
 @pytest.mark.asyncio
 async def test_send_webhook_callback_success():

@@ -209,7 +209,6 @@ class ChatFeedback(BaseModel):
         ]
     )
     user_id = models.UUIDField(null=True, blank=True)  # Optional user association
-    comment = models.TextField(null=True, blank=True)  # Optional feedback comment
     ip_address = models.GenericIPAddressField(null=True, blank=True)  # For anonymous feedback
     user_agent = models.TextField(null=True, blank=True)  # Browser info
     

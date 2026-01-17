@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     conversation_turn: Optional[int] = Field(default=None, description="Turn number in conversation (1-indexed)")
     device_type: Optional[str] = Field(default=None, description="Device type: mobile, tablet, desktop, unknown")
     referrer: Optional[str] = Field(default=None, description="Page referrer URL")
+    session_id: Optional[str] = Field(default=None, description="Existing session ID to resume")
 
 class CitationSource(BaseModel):
     """Model for citation sources"""

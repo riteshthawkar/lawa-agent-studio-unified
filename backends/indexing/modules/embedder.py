@@ -18,6 +18,7 @@ import asyncio
 import aiohttp
 from aiolimiter import AsyncLimiter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -36,6 +37,125 @@ logger = logging.getLogger(__name__)
 _model_cache = {}
 _bm25_cache = None
 _model_cache_lock = threading.Lock()
+
+
+class FairShareRateLimiter:
+    """
+    A rate limiter that fairly distributes API quota among concurrent jobs.
+
+    Instead of all jobs competing for a single rate limit, this class:
+    1. Tracks the number of active jobs using the limiter
+    2. Dynamically adjusts each job's effective rate based on concurrent usage
+    3. Ensures no single job can monopolize the API quota
+
+    Example:
+        - Total rate limit: 120 req/min
+        - 1 job active: that job gets 120 req/min
+        - 2 jobs active: each job gets 60 req/min
+        - 4 jobs active: each job gets 30 req/min
+    """
+
+    def __init__(self, total_rate_limit: int = 120, time_period: float = 60.0,
+                 min_rate_per_job: int = 10):
+        """
+        Initialize the fair share rate limiter.
+
+        Args:
+            total_rate_limit: Total API requests allowed per time_period
+            time_period: Time period in seconds (default: 60 for per-minute)
+            min_rate_per_job: Minimum rate each job is guaranteed (default: 10)
+        """
+        self.total_rate_limit = total_rate_limit
+        self.time_period = time_period
+        self.min_rate_per_job = min_rate_per_job
+        self._active_jobs = 0
+        self._lock = asyncio.Lock()
+        self._job_limiters: Dict[str, AsyncLimiter] = {}
+        logger.info(f"FairShareRateLimiter initialized: {total_rate_limit} req/{time_period}s, "
+                   f"min {min_rate_per_job} per job")
+
+    def _calculate_job_rate(self) -> int:
+        """Calculate the rate limit for each active job."""
+        if self._active_jobs <= 0:
+            return self.total_rate_limit
+        rate = self.total_rate_limit // self._active_jobs
+        return max(rate, self.min_rate_per_job)
+
+    @asynccontextmanager
+    async def job_session(self, job_id: str):
+        """
+        Context manager for a job to acquire its fair share of the rate limit.
+
+        Usage:
+            async with rate_limiter.job_session("job-123") as limiter:
+                async with limiter:
+                    # Make API call
+        """
+        async with self._lock:
+            self._active_jobs += 1
+            job_rate = self._calculate_job_rate()
+            # Create a dedicated limiter for this job
+            self._job_limiters[job_id] = AsyncLimiter(max_rate=job_rate, time_period=self.time_period)
+            logger.info(f"Job {job_id} started: {self._active_jobs} active jobs, "
+                       f"rate={job_rate} req/{self.time_period}s")
+
+        try:
+            yield self._job_limiters[job_id]
+        finally:
+            async with self._lock:
+                self._active_jobs -= 1
+                if job_id in self._job_limiters:
+                    del self._job_limiters[job_id]
+                logger.info(f"Job {job_id} finished: {self._active_jobs} active jobs remaining")
+
+    async def acquire(self, job_id: Optional[str] = None):
+        """
+        Acquire a rate limit token for the specified job.
+
+        If job_id is provided and has a session, uses that job's limiter.
+        Otherwise falls back to a global limiter.
+        """
+        if job_id and job_id in self._job_limiters:
+            async with self._job_limiters[job_id]:
+                pass
+        else:
+            # Fallback for jobs without explicit session
+            async with self._lock:
+                rate = self._calculate_job_rate()
+            temp_limiter = AsyncLimiter(max_rate=rate, time_period=self.time_period)
+            async with temp_limiter:
+                pass
+
+
+# Global fair share rate limiter for Gemini API
+# This is shared across all embedder instances in a worker process
+_gemini_rate_limiter: Optional[FairShareRateLimiter] = None
+_gemini_rate_limiter_lock = threading.Lock()
+
+
+def get_gemini_rate_limiter() -> FairShareRateLimiter:
+    """Get or create the global Gemini API rate limiter."""
+    global _gemini_rate_limiter
+    with _gemini_rate_limiter_lock:
+        if _gemini_rate_limiter is None:
+            rate_limit = int(os.getenv("GEMINI_RATE_LIMIT", "120"))
+            enable_per_job = os.getenv("ENABLE_PER_JOB_RATE_LIMIT", "true").lower() == "true"
+            if enable_per_job:
+                _gemini_rate_limiter = FairShareRateLimiter(
+                    total_rate_limit=rate_limit,
+                    time_period=60.0,
+                    min_rate_per_job=15  # Each job gets at least 15 req/min
+                )
+                logger.info(f"Created FairShareRateLimiter with {rate_limit} total req/min")
+            else:
+                # Fallback to simple rate limiter wrapped in compatibility class
+                _gemini_rate_limiter = FairShareRateLimiter(
+                    total_rate_limit=rate_limit,
+                    time_period=60.0,
+                    min_rate_per_job=rate_limit  # No fair sharing - single global limit
+                )
+                logger.info(f"Created simple rate limiter with {rate_limit} req/min (per-job disabled)")
+        return _gemini_rate_limiter
 
 
 class DocumentEmbedder:
@@ -871,11 +991,33 @@ class GeminiDocumentEmbedder:
             preserve_atomic_blocks=True,
             include_all_headings=True
         )
-        # Rate limiter for Gemini API (default: 60 requests per minute)
-        rate_limit = int(os.getenv("GEMINI_RATE_LIMIT", "60"))
+        # Use the global fair share rate limiter for better multi-job handling
+        self.fair_share_limiter = get_gemini_rate_limiter()
+        # Keep a simple rate limiter as fallback for backward compatibility
+        rate_limit = int(os.getenv("GEMINI_RATE_LIMIT", "120"))
         self.rate_limiter = AsyncLimiter(max_rate=rate_limit, time_period=60)
-        logger.debug(f"Gemini API rate limiter initialized: {rate_limit} requests/minute")
+        # Current job ID for rate limiting (set during job execution)
+        self._current_job_id: Optional[str] = None
+        self._job_limiter: Optional[AsyncLimiter] = None
+        logger.debug(f"GeminiDocumentEmbedder initialized with fair share rate limiting")
         self._setup_models()
+
+    def set_job_context(self, job_id: str, job_limiter: AsyncLimiter):
+        """Set the current job context for rate limiting."""
+        self._current_job_id = job_id
+        self._job_limiter = job_limiter
+        logger.debug(f"Embedder job context set: {job_id}")
+
+    def clear_job_context(self):
+        """Clear the current job context."""
+        self._current_job_id = None
+        self._job_limiter = None
+
+    def get_active_rate_limiter(self) -> AsyncLimiter:
+        """Get the appropriate rate limiter for the current context."""
+        if self._job_limiter is not None:
+            return self._job_limiter
+        return self.rate_limiter
     
     async def initialize(self) -> bool:
         """
@@ -989,7 +1131,9 @@ class GeminiDocumentEmbedder:
         
         async def embed_single_text(session: aiohttp.ClientSession, text: str, index: int) -> tuple:
             """Embed a single text with rate limiting and retry logic."""
-            async with self.rate_limiter:
+            # Use job-specific rate limiter if available, otherwise fall back to global
+            active_limiter = self.get_active_rate_limiter()
+            async with active_limiter:
                 for attempt in range(max_retries):
                     try:
                         content = {"parts": [{"text": text}]}

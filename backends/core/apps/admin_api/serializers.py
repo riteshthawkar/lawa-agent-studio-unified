@@ -571,3 +571,54 @@ class HelpArticleCreateUpdateSerializer(serializers.ModelSerializer):
             'category', 'order', 'is_active', 'is_featured',
             'related_articles', 'tags'
         ]
+
+
+# =====================
+# Admin Authentication Serializers
+# =====================
+
+class AdminLoginSerializer(serializers.Serializer):
+    """
+    Serializer for admin login - validates credentials AND superuser status
+    before issuing tokens (security-critical).
+    """
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        from django.contrib.auth import authenticate
+
+        email = attrs.get('email')
+        password = attrs.get('password')
+
+        if not email or not password:
+            raise serializers.ValidationError('Email and password are required')
+
+        # Authenticate user
+        user = authenticate(username=email, password=password)
+
+        if not user:
+            raise serializers.ValidationError('Invalid email or password')
+
+        if not user.is_active:
+            raise serializers.ValidationError('Account is disabled')
+
+        # CRITICAL: Check admin privileges BEFORE returning user
+        if not user.is_superuser and not user.is_staff:
+            raise serializers.ValidationError('Access denied. Administrator privileges required.')
+
+        attrs['user'] = user
+        return attrs
+
+
+class AdminUserSerializer(serializers.ModelSerializer):
+    """Serializer for admin user data in login response"""
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'name', 'username',
+            'is_staff', 'is_superuser', 'is_active',
+            'created_at', 'last_login'
+        ]
+        read_only_fields = fields

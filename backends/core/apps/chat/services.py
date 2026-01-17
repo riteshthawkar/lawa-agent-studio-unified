@@ -101,13 +101,14 @@ class ChatbotService:
             
             raise ChatbotServiceException(error_msg, status_code=status_code)
     
-    def create_session(self, chatbot, site, user_id=None, meta=None):
+    def create_session(self, chatbot, site, user_id=None, meta=None, referrer=None):
         """Create a new chat session"""
         session = ChatSession.objects.create(
             chatbot_id=chatbot.id,
             site_id=site.id,
             user_id=user_id,
-            meta=meta or {}
+            meta=meta or {},
+            referrer=referrer
         )
         return session
     

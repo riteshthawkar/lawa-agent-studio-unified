@@ -89,10 +89,15 @@ class AuthenticationService:
         Raises:
             Exception: If email sending fails
         """
-        subject = 'Verify your email - Lawa Webbotify'
+        if email_type == 'password_reset':
+            subject = 'Reset Your Password - Lawa Agent Studio'
+            template_name = 'emails/password_reset_email.html'
+        else:
+            subject = 'Verify Your Email - Lawa Agent Studio'
+            template_name = 'emails/verification_email.html'
 
         # Render HTML template
-        html_content = render_to_string('emails/verification_email.html', {'otp': otp})
+        html_content = render_to_string(template_name, {'otp': otp})
         text_content = strip_tags(html_content)
 
         recipient_list = [email]
@@ -115,12 +120,13 @@ class AuthenticationService:
 
         except Exception as e:
             logger.error(
-                "Failed to send verification email",
+                f"Failed to send verification email. DEBUG OTP: {otp}",
                 extra={
                     'email': email,
                     'user_id': str(user.id) if user else None,
                     'error': str(e),
-                    'email_type': email_type
+                    'email_type': email_type,
+                    'otp': otp
                 },
                 exc_info=True
             )

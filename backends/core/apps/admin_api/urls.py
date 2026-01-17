@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from apps.admin_api.views import (
     AdminStatsViews, UserViewSet, OrganizationViewSet,
+    admin_login,
     all_jobs, all_chatbots, all_sites,
     job_detail, job_action, export_jobs,
     audit_logs, bulk_user_action, export_users, impersonate_user,
@@ -10,7 +11,8 @@ from apps.admin_api.views import (
     platform_analytics, tier_stats, get_tier_config, update_org_tier,
     feedback_list, feedback_detail, feedback_stats, feedback_export, feedback_bulk_action,
     faq_categories, faq_category_detail, faqs_list, faq_detail,
-    help_articles_list, help_article_detail, help_center_stats
+    help_articles_list, help_article_detail, help_center_stats,
+    admin_leads_dashboard, admin_query_analytics, admin_geo_analytics
 )
 
 router = DefaultRouter()
@@ -18,6 +20,9 @@ router.register(r'users', UserViewSet, basename='admin-users')
 router.register(r'organizations', OrganizationViewSet, basename='admin-organizations')
 
 urlpatterns = [
+    # Admin Authentication (no auth required - validates credentials internally)
+    path('auth/login/', admin_login, name='admin-login'),
+
     # Stats endpoints (ViewSet actions)
     path('stats/overview/', AdminStatsViews.as_view({'get': 'overview'}), name='admin-stats-overview'),
     path('stats/growth/', AdminStatsViews.as_view({'get': 'growth'}), name='admin-stats-growth'),
@@ -56,6 +61,11 @@ urlpatterns = [
     # Platform Analytics
     path('analytics/', platform_analytics, name='admin-platform-analytics'),
     path('analytics/tiers/', tier_stats, name='admin-tier-stats'),
+
+    # Admin Leads Dashboard
+    path('leads/', admin_leads_dashboard, name='admin-leads-dashboard'),
+    path('leads/queries/', admin_query_analytics, name='admin-query-analytics'),
+    path('leads/geo/', admin_geo_analytics, name='admin-geo-analytics'),
 
     # Tier Configuration
     path('tiers/config/', get_tier_config, name='admin-tier-config'),

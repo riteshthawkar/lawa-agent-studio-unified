@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Hot Lead Alert</title>
+    <!--[if mso]>
+    <noscript>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    </noscript>
+    <![endif]-->
+    <style type="text/css">
+        /* Reset */
+        body, table, td, p, a, li, blockquote {
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }
+        table, td {
+            mso-table-lspace: 0pt;
+            mso-table-rspace: 0pt;
+        }
+
+        /* Base styles */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #0a0a0b;
+            color: #fafafa;
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #0a0a0b;
+        }
+
+        /* Header */
+        .header-section {
+            background: linear-gradient(135deg, #18181b 0%, #1e1e24 50%, #18181b 100%);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 32px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: -0.5px;
+            margin: 0;
+        }
+
+        .logo-accent {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Alert Banner */
+        .alert-banner {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            margin: 24px 16px;
+            padding: 28px 24px;
+            border-radius: 16px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .alert-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .alert-title {
+            font-size: 22px;
+            font-weight: 800;
+            color: #ffffff;
+            margin: 0 0 8px 0;
+        }
+
+        .alert-subtitle {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.9);
+            margin: 0;
+        }
+
+        /* Content Card */
+        .content-card {
+            background-color: #18181b;
+            margin: 0 16px 24px 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        .content-padding {
+            padding: 28px;
+        }
+
+        /* Lead Details Grid */
+        .details-grid {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .detail-row td {
+            padding: 14px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .detail-row:last-child td {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #71717a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            width: 100px;
+        }
+
+        .detail-value {
+            font-size: 15px;
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        /* Priority Badge */
+        .priority-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.25) 0%, rgba(220, 38, 38, 0.25) 100%);
+            color: #fca5a5;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        /* Score Badge */
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+            padding: 6px 14px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            color: #a5b4fc;
+        }
+
+        /* Question Box */
+        .question-section {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 24px;
+            border-left: 4px solid #ef4444;
+        }
+
+        .section-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #71717a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .question-item {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #d4d4d8;
+            border-left: 2px solid rgba(59, 130, 246, 0.5);
+        }
+
+        .question-icon {
+            color: #60a5fa;
+            margin-right: 8px;
+        }
+
+        /* Summary Box */
+        .summary-section {
+            background: rgba(139, 92, 246, 0.08);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            border: 1px solid rgba(139, 92, 246, 0.15);
+        }
+
+        .summary-text {
+            font-size: 14px;
+            color: #d4d4d8;
+            line-height: 1.6;
+            margin: 0;
+        }
+
+        /* AI Badge */
+        .ai-badge {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(236, 72, 153, 0.2) 100%);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #c4b5fd;
+            margin-left: 8px;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            text-align: center;
+            padding: 28px 0 0 0;
+            margin-top: 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .cta-text {
+            font-size: 14px;
+            color: #a1a1aa;
+            margin-bottom: 20px;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 16px 40px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .cta-button:hover {
+            opacity: 0.9;
+        }
+
+        /* Footer */
+        .footer-section {
+            text-align: center;
+            padding: 32px;
+            color: #52525b;
+            font-size: 12px;
+        }
+
+        .footer-links a {
+            color: #71717a;
+            text-decoration: underline;
+        }
+
+        .footer-brand {
+            font-weight: 600;
+            color: #71717a;
+            margin-top: 16px;
+        }
+
+        /* Responsive */
+        @media screen and (max-width: 600px) {
+            .content-padding {
+                padding: 20px 16px;
+            }
+
+            .alert-banner {
+                margin: 16px 12px;
+                padding: 24px 20px;
+            }
+
+            .alert-title {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <!-- Header -->
+        <div class="header-section">
+            <h1 class="logo">
+                <span class="logo-accent">Lawa</span> Agent Studio
+            </h1>
+        </div>
+
+        <!-- Alert Banner -->
+        <div class="alert-banner">
+            <div class="alert-icon">&#128293;</div>
+            <h2 class="alert-title">Hot Lead Detected!</h2>
+            <p class="alert-subtitle">A high-intent visitor just engaged with your chatbot</p>
+        </div>
+
+        <!-- Content Card -->
+        <div class="content-card">
+            <div class="content-padding">
+                <!-- Lead Details -->
+                <table class="details-grid" role="presentation">
+                    <tr class="detail-row">
+                        <td class="detail-label">Priority</td>
+                        <td class="detail-value">
+                            <span class="priority-badge">&#128293; HOT LEAD</span>
+                        </td>
+                    </tr>
+                    <tr class="detail-row">
+                        <td class="detail-label">Intent</td>
+                        <td class="detail-value">
+                            {{ lead.intent|default:"High-Intent Inquiry"|title }}
+                            <span class="ai-badge">&#10024; AI Detected</span>
+                        </td>
+                    </tr>
+                    <tr class="detail-row">
+                        <td class="detail-label">Score</td>
+                        <td class="detail-value">
+                            <span class="score-badge">{{ lead.score }} points</span>
+                        </td>
+                    </tr>
+                    {% if lead.geo %}
+                    <tr class="detail-row">
+                        <td class="detail-label">Location</td>
+                        <td class="detail-value">&#128205; {{ lead.geo }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if lead.device %}
+                    <tr class="detail-row">
+                        <td class="detail-label">Device</td>
+                        <td class="detail-value">
+                            {% if lead.device == "mobile" %}&#128241;{% else %}&#128187;{% endif %}
+                            {{ lead.device|title }}
+                        </td>
+                    </tr>
+                    {% endif %}
+                    <tr class="detail-row">
+                        <td class="detail-label">Date</td>
+                        <td class="detail-value">&#128197; {{ lead.date|date:"F d, Y" }}</td>
+                    </tr>
+                </table>
+
+                <!-- Key Questions -->
+                {% if lead.questions %}
+                <div class="question-section">
+                    <div class="section-label">&#10067; Key Questions Asked</div>
+                    {% for question in lead.questions %}
+                    <div class="question-item">
+                        <span class="question-icon">&#10148;</span>
+                        {{ question|truncatechars:120 }}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- Summary -->
+                {% if lead.summary %}
+                <div class="summary-section">
+                    <div class="section-label">&#128172; Conversation Summary</div>
+                    <p class="summary-text">{{ lead.summary }}</p>
+                </div>
+                {% endif %}
+
+                <!-- CTA -->
+                <div class="cta-section">
+                    <p class="cta-text">
+                        Review the full conversation and follow up while the lead is hot!
+                    </p>
+                    <a href="{{ dashboard_url }}" class="cta-button">View Lead Details &#8594;</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer-section">
+            <p class="footer-links">
+                You're receiving this because you enabled hot lead notifications.<br>
+                <a href="{{ settings_url }}">Manage notification settings</a>
+            </p>
+            <p class="footer-brand">&copy; {{ current_year }} Lawa Agent Studio. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

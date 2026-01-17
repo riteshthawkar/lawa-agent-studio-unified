@@ -82,6 +82,23 @@ class DjangoChatRepository:
             return None
 
     @staticmethod
+    async def get_session(pool: asyncpg.Pool, session_id: str) -> bool:
+        """
+        Check if a session exists.
+        """
+        if not pool or not session_id:
+            return False
+            
+        try:
+            query = "SELECT 1 FROM chat_sessions WHERE id = $1::uuid"
+            async with pool.acquire() as conn:
+                result = await conn.fetchval(query, session_id)
+                return bool(result)
+        except Exception:
+            # Handle invalid UUID format or DB errors gracefully
+            return False
+
+    @staticmethod
     async def save_chat_message(
         pool: asyncpg.Pool,
         session_id: str,
@@ -126,20 +143,27 @@ class DjangoChatRepository:
             async with pool.acquire() as conn:
                 citations_json = json.dumps(citations if citations else [])
 
-                result = await conn.fetchrow(
-                    query,
-                    session_id,
-                    role,
-                    content,
-                    citations_json,
-                    tokens_in,
-                    tokens_out,
-                    feedback,
-                    latency_ms,
-                    query_category,
-                    query_category_confidence,
-                    conversation_turn
-                )
+                async with conn.transaction():
+                    result = await conn.fetchrow(
+                        query,
+                        session_id,
+                        role,
+                        content,
+                        citations_json,
+                        tokens_in,
+                        tokens_out,
+                        feedback,
+                        latency_ms,
+                        query_category,
+                        query_category_confidence,
+                        conversation_turn
+                    )
+
+                    # Also update session last_activity
+                    await conn.execute(
+                        "UPDATE chat_sessions SET last_activity = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid",
+                        session_id
+                    )
 
                 if result:
                     message_id = str(result['id'])
@@ -237,7 +261,7 @@ class DjangoChatRepository:
         pool: asyncpg.Pool, 
         message_id: str, 
         feedback_type: str,
-        comment: str = None,
+        # comment: str = None, # Comment functionality removed
         ip_address: str = None,
         user_agent: str = None
     ) -> Optional[str]:
@@ -249,12 +273,12 @@ class DjangoChatRepository:
         try:
             query = """
                 INSERT INTO chat_feedbacks (
-                    id, message_id, feedback_type, comment, 
+                    id, message_id, feedback_type, 
                     ip_address, user_agent, created_at, updated_at
                 )
                 VALUES (
-                    gen_random_uuid(), $1::uuid, $2, $3, 
-                    $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    gen_random_uuid(), $1::uuid, $2, 
+                    $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
                 RETURNING id
             """
@@ -264,7 +288,6 @@ class DjangoChatRepository:
                     query,
                     message_id,
                     feedback_type,
-                    comment,
                     ip_address,
                     user_agent
                 )

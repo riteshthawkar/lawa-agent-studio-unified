@@ -332,20 +332,35 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
             geo_data = geo_location.to_dict()
             logger.info(f"Geo-location for {client_ip}: {geo_data.get('country_code', 'unknown')}")
 
-    async def ensure_session_created(device_type=None, referrer=None):
+    async def ensure_session_created(device_type=None, referrer=None, provided_session_id=None):
         """Lazily create session on first message - prevents empty sessions"""
         nonlocal session_id, session_created
 
         if session_created or not site_info or not app.state.pool:
             return session_id
 
+        # 1. If frontend provided a session ID, check if it exists in DB
+        if provided_session_id:
+             try:
+                 exists = await DjangoChatRepository.get_session(app.state.pool, provided_session_id)
+                 if exists:
+                     session_id = provided_session_id
+                     session_created = True
+                     logger.info(f"Resumed existing session {session_id} for site {site_info['site_domain']}")
+                     # Optionally update analytics for resumed session
+                     # await DjangoChatRepository.update_session_analytics(app.state.pool, session_id, device_type, referrer)
+                     return session_id
+             except Exception as e:
+                 logger.warning(f"Failed to check/resume session {provided_session_id}: {e}")
+
+        # 2. If no valid session ID from frontend, create a new one
         session_data = {
             'connection_type': 'websocket',
             'api_key': api_key,
             'source': 'embedded_widget'
         }
 
-        session_id = await DjangoChatRepository.create_session(
+        created_session_id = await DjangoChatRepository.create_session(
             app.state.pool,
             site_id=site_info['site_id'],
             chatbot_id=site_info['chatbot_id'],
@@ -359,7 +374,8 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
             referrer=referrer
         )
 
-        if session_id:
+        if created_session_id:
+            session_id = created_session_id
             session_created = True
             logger.info(f"Created Django session {session_id} for site {site_info['site_domain']} (IP: {client_ip or 'unknown'})")
         else:
@@ -405,7 +421,7 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
                                     app.state.pool,
                                     message_id=message_id_str,
                                     feedback_type=feedback_type,
-                                    comment=comment,
+                                    # comment=comment, # Removed
                                     ip_address=client_ip,
                                     user_agent=user_agent
                                 )
@@ -461,13 +477,14 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
             conversation_turn = chat_request.conversation_turn
             device_type = chat_request.device_type
             referrer = chat_request.referrer
+            
+            # Check if frontend provided a session ID to resume matches backend expectations
+            provided_session_id = getattr(chat_request, 'session_id', None)
 
-            # Lazy session creation - only create session on first actual message
+            # Lazy session creation - only create/resume session on first actual message
             # This prevents empty sessions from being stored in the database
-            # device_type and referrer are passed during creation (no need to update later)
-            await ensure_session_created(device_type=device_type, referrer=referrer)
-
-            # Note: User message will be saved after classification is determined
+            # device_type and referrer are passed during creation
+            await ensure_session_created(device_type=device_type, referrer=referrer, provided_session_id=provided_session_id)
             # This allows us to store the query category with the user message
 
             # Apply query rewriting agent with categories for classification

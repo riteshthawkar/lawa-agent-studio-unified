@@ -85,7 +85,7 @@ class FeedbackNotificationService:
         else:
             subject_prefix = ''
 
-        subject = f"{subject_prefix}New {feedback_type_display} Received - Lawa Webbotify"
+        subject = f"{subject_prefix}New {feedback_type_display} Received - Lawa Agent Studio"
 
         try:
             # Render HTML template
@@ -177,7 +177,7 @@ class FeedbackNotificationService:
             'user_name': feedback.user.name if feedback.user and hasattr(feedback.user, 'name') else None,
         }
 
-        subject = f"Your {feedback_type_display} Status Updated - Lawa Webbotify"
+        subject = f"Your {feedback_type_display} Status Updated - Lawa Agent Studio"
 
         try:
             # Render HTML template

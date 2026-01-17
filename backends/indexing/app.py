@@ -718,12 +718,16 @@ async def start_indexing(
     use_celery = os.getenv("USE_CELERY_WORKER", "false").lower() == "true"
     if use_celery:
         try:
-            from tasks import index_site_task
-            logger.info(f"Dispatching task {task_id} to Celery worker")
-            index_site_task.delay(
+            from tasks import dispatch_indexing_task
+            crawler_config_dict = asdict(crawler_config)
+            embedding_config_dict = asdict(embedding_config)
+
+            # Use priority-based dispatch - routes to appropriate queue based on job size
+            logger.info(f"Dispatching task {task_id} to Celery (max_pages={crawler_config.max_pages})")
+            dispatch_indexing_task(
                 task_id=task_id,
-                crawler_config_dict=asdict(crawler_config),
-                embedding_config_dict=asdict(embedding_config),
+                crawler_config_dict=crawler_config_dict,
+                embedding_config_dict=embedding_config_dict,
                 start_time_iso=datetime.now().isoformat(),
                 external_job_id=request.external_job_id,
                 callback_url=request.callback_url
@@ -960,12 +964,16 @@ async def retry_task(task_id: str, background_tasks: BackgroundTasks):
     use_celery = os.getenv("USE_CELERY_WORKER", "false").lower() == "true"
     if use_celery:
         try:
-            from tasks import index_site_task
-            logger.info(f"Dispatching retried task {task_id} to Celery worker")
-            index_site_task.delay(
+            from tasks import dispatch_indexing_task
+            crawler_config_dict = asdict(crawler_config)
+            embedding_config_dict = asdict(embedding_config)
+
+            # Use priority-based dispatch for retries as well
+            logger.info(f"Dispatching retried task {task_id} to Celery (max_pages={crawler_config.max_pages})")
+            dispatch_indexing_task(
                 task_id=task_id,
-                crawler_config_dict=asdict(crawler_config),
-                embedding_config_dict=asdict(embedding_config),
+                crawler_config_dict=crawler_config_dict,
+                embedding_config_dict=embedding_config_dict,
                 start_time_iso=datetime.now().isoformat(),
                 external_job_id=task.get("external_job_id"),
                 callback_url=stored_callback_url
