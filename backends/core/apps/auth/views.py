@@ -696,6 +696,8 @@ def delete_account(request):
             )
 
         # Check if user is the sole owner of any organizations
+        # Also collect orgs to delete (single-owner with no other members)
+        orgs_to_delete = []
         owned_orgs = Membership.objects.filter(user=user, role='owner').select_related('organization')
         for membership in owned_orgs:
             org = membership.organization
@@ -710,12 +712,19 @@ def delete_account(request):
                         },
                         status=status.HTTP_400_BAD_REQUEST
                     )
+                else:
+                    # No other members - mark org for deletion to prevent orphaned orgs
+                    orgs_to_delete.append(org)
 
         user_id = str(user.id)
         user_email = user.email
 
-        # Delete user (cascade will handle related data)
+        # Delete user and their single-owner orgs (cascade will handle memberships)
         with transaction.atomic():
+            # Delete organizations first (while memberships still exist)
+            for org in orgs_to_delete:
+                logger.info(f"Deleting orphan-preventing org: {org.id} ({org.name})")
+                org.delete()
             user.delete()
 
         logger.info(f"Account deleted successfully for user: {user_id} ({user_email})")

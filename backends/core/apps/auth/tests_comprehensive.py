@@ -181,6 +181,33 @@ class AccountDeletionTests(AuthTestCase):
         
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_delete_account_cleans_up_org(self):
+        """Test that deleting account also deletes single-owner organization"""
+        url = reverse('delete-account')
+        payload = {
+            'password': 'TestPassword123!',
+            'confirmation': 'DELETE MY ACCOUNT'
+        }
+        
+        # Store org ID before deletion
+        org_id = self.org.id
+        user_id = self.user.id
+        
+        # Verify org exists before deletion
+        self.assertTrue(Organization.objects.filter(id=org_id).exists())
+        
+        response = self.client.delete(url, payload, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # User should be deleted
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.assertFalse(User.objects.filter(id=user_id).exists())
+        
+        # Organization should also be deleted (no orphans!)
+        self.assertFalse(Organization.objects.filter(id=org_id).exists())
+
 
 class APIKeyManagementTests(AuthTestCase):
     """Tests for API key management"""

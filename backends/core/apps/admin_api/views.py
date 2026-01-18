@@ -1,5 +1,5 @@
 from rest_framework import viewsets, views, status, filters
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -8,8 +8,17 @@ from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
+from datetime import timedelta
 
-from apps.admin_api.permissions import IsAdminUser
+from apps.admin_api.permissions import (
+    IsAdminUser, IsSuperAdmin, AdminIPAllowlist, AdminWithIPCheck,
+    CanImpersonate, CanPerformBulkOperations, CanExportData,
+    UserManagerAdmin, SupportAdmin, BillingAdmin
+)
+from apps.core.rate_limiting import (
+    AdminRateThrottle, AdminBurstThrottle, AdminLoginThrottle,
+    AdminLoginDailyThrottle, AdminSensitiveOperationThrottle, AdminExportThrottle
+)
 from apps.admin_api.analytics import AdminStatsService
 from apps.usage.tier_config import TIER_FEATURES, get_tier_limits
 from apps.admin_api.models import AdminAuditLog, LoginHistory
@@ -59,14 +68,19 @@ def get_client_ip(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([AdminLoginThrottle, AdminLoginDailyThrottle])
 def admin_login(request):
     """
-    Admin-only login endpoint.
+    Admin-only login endpoint with brute force protection.
 
     POST /v1/admin/auth/login/
 
     This endpoint validates credentials AND admin status BEFORE issuing tokens.
     Non-admin users will be rejected with 403 Forbidden.
+
+    Rate limits:
+        - 5 attempts per minute per IP
+        - 20 attempts per day per IP
 
     Request body:
         - email: Admin email

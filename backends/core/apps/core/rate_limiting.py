@@ -260,6 +260,119 @@ def check_rate_limit(request, scope='user', increment=False):
     }
 
 
+# ===========================================
+# Admin-Specific Rate Limiting
+# ===========================================
+
+class AdminRateThrottle(SimpleRateThrottle):
+    """
+    Rate limit for admin API endpoints.
+
+    More restrictive than regular user limits to prevent abuse
+    of admin privileges.
+    """
+    scope = 'admin'
+    rate = '100/minute'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key based on admin user ID."""
+        if not request.user or not request.user.is_authenticated:
+            return None  # Only authenticated admins
+
+        if not request.user.is_staff:
+            return None  # Only admin users
+
+        return f'throttle_admin_{request.user.id}'
+
+
+class AdminBurstThrottle(SimpleRateThrottle):
+    """
+    Burst protection for admin endpoints.
+
+    Prevents rapid-fire admin operations which could indicate
+    compromised credentials or automated attacks.
+    """
+    scope = 'admin_burst'
+    rate = '30/minute'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key for admin burst limiting."""
+        if not request.user or not request.user.is_authenticated:
+            return None
+
+        if not request.user.is_staff:
+            return None
+
+        return f'throttle_admin_burst_{request.user.id}'
+
+
+class AdminLoginThrottle(SimpleRateThrottle):
+    """
+    Strict rate limit for admin login attempts.
+
+    Prevents brute force attacks on admin accounts.
+    Uses IP-based limiting since user isn't authenticated yet.
+    """
+    scope = 'admin_login'
+    rate = '5/minute'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key based on IP address."""
+        return f'throttle_admin_login_{self.get_ident(request)}'
+
+
+class AdminLoginDailyThrottle(SimpleRateThrottle):
+    """
+    Daily limit for admin login attempts per IP.
+
+    Provides long-term protection against distributed attacks.
+    """
+    scope = 'admin_login_daily'
+    rate = '20/day'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key based on IP address."""
+        return f'throttle_admin_login_daily_{self.get_ident(request)}'
+
+
+class AdminSensitiveOperationThrottle(SimpleRateThrottle):
+    """
+    Very restrictive throttle for sensitive admin operations.
+
+    Use for:
+    - User deletion
+    - Bulk operations
+    - Impersonation
+    - Permission changes
+    """
+    scope = 'admin_sensitive'
+    rate = '10/hour'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key for sensitive operations."""
+        if not request.user or not request.user.is_authenticated:
+            return None
+
+        return f'throttle_admin_sensitive_{request.user.id}'
+
+
+class AdminExportThrottle(SimpleRateThrottle):
+    """
+    Rate limit for admin data export operations.
+
+    Prevents mass data exfiltration through export endpoints.
+    """
+    scope = 'admin_export'
+    rate = '5/hour'
+
+    def get_cache_key(self, request, view):
+        """Generate cache key for export operations."""
+        if not request.user or not request.user.is_authenticated:
+            return None
+
+        return f'throttle_admin_export_{request.user.id}'
+
+
 # Decorator for view functions
 def rate_limit(scope='user', rate=None):
     """
