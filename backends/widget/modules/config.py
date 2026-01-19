@@ -446,9 +446,58 @@ You will be provided with the user query, language, and information sources to c
     
     return base_prompt
 
-def get_config():
-    """
-    Returns the current module object as the configuration object.
-    This allows accessing configuration variables as attributes.
-    """
     return sys.modules[__name__]
+
+
+# ====================================================================
+# USAGE LIMITS CONFIGURATION (Duplicated from Core)
+# ====================================================================
+
+TIER_LIMITS = {
+    'basic': {
+        'sites': 1,
+        'chatbots': 1,
+        'daily_conversations': 100,
+        'max_conversations': 5000,
+        'pages_per_site': 50,
+        'leads_per_page': 10,
+    },
+    'premium': {
+        'sites': 10,
+        'chatbots': 25,
+        'daily_conversations': 1000,
+        'max_conversations': -1,  # Unlimited
+        'pages_per_site': 500,
+        'leads_per_page': 50,
+    },
+    'enterprise': {
+        'sites': -1,  # Unlimited
+        'chatbots': -1,  # Unlimited
+        'daily_conversations': -1,  # Unlimited
+        'max_conversations': -1,  # Unlimited
+        'pages_per_site': -1,  # Unlimited
+        'leads_per_page': -1,  # Unlimited
+    }
+}
+
+def get_tier_limits(plan: str) -> dict:
+    """Get limits for a specific tier"""
+    return TIER_LIMITS.get(plan, TIER_LIMITS['basic'])
+
+
+# ====================================================================
+# CONFIGURATION ACCESSOR
+# ====================================================================
+
+class AppConfig:
+    """Configuration helper class"""
+    def __init__(self):
+        self.PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+        self.PINECONE_INDEX_NAME = PINECONE_INDEX_NAME
+        self.PINECONE_SUMMARY_INDEX = os.getenv("PINECONE_SUMMARY_INDEX_NAME", "mbzuai-summary-only-index-latest")
+        self.PINECONE_TEXT_INDEX = os.getenv("PINECONE_TEXT_INDEX_NAME", "mbzuai-text-only-index-latest")
+        self.DJANGO_BACKEND_URL = os.getenv("DJANGO_BACKEND_URL", "http://localhost:8001")
+
+def get_config():
+    """Get configuration object"""
+    return AppConfig()

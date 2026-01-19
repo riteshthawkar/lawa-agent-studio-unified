@@ -301,3 +301,79 @@ class DjangoChatRepository:
         except Exception as e:
             logger.error(f"Error creating detailed feedback: {e}")
             return None
+
+    @staticmethod
+    async def check_daily_conversation_limit(pool: asyncpg.Pool, org_id: str, limit: int) -> tuple[bool, int]:
+        """
+        Check if the organization has reached its daily conversation limit.
+        Returns (is_limit_reached, current_usage).
+        """
+        if not pool or not org_id:
+            return False, 0
+        
+        # -1 means unlimited
+        if limit == -1:
+            return False, 0
+            
+        try:
+            # Count conversations (usage events of type 'chat') since start of day (UTC)
+            # Session timezone is set to UTC in lawa_integration.py
+            query = """
+                SELECT COALESCE(SUM(units), 0)
+                FROM usage_events
+                WHERE org_id = $1::uuid
+                AND type = 'chat'
+                AND occurred_at >= CURRENT_DATE
+            """
+            
+            async with pool.acquire() as conn:
+                usage = await conn.fetchval(query, org_id)
+                usage = usage or 0
+                
+                is_reached = usage >= limit
+                if is_reached:
+                    logger.warning(f"Quota exceeded for org {org_id}: {usage}/{limit}")
+                    
+                return is_reached, usage
+                
+        except Exception as e:
+            logger.error(f"Error checking daily limit: {e}")
+            # Fail open (allow chat) if error, to avoid blocking users due to DB issues
+            return False, 0
+
+    @staticmethod
+    async def track_usage_event(
+        pool: asyncpg.Pool, 
+        org_id: str, 
+        site_id: str, 
+        chatbot_id: str, 
+        session_id: str
+    ) -> bool:
+        """
+        Track a usage event (chat conversation increment).
+        """
+        if not pool: return False
+        
+        try:
+            query = """
+                INSERT INTO usage_events (
+                    id, org_id, site_id, chatbot_id, session_id,
+                    type, units, cost_cents, meta, occurred_at,
+                    created_at, updated_at
+                )
+                VALUES (
+                    gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid, $4::uuid,
+                    'chat', 1, 0, '{}', CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+            """
+            
+            async with pool.acquire() as conn:
+                await conn.execute(query, org_id, site_id, chatbot_id, session_id)
+                logger.info(f"racked usage event for org {org_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error tracking usage event: {e}")
+            return False
+

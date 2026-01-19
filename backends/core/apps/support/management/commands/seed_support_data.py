@@ -14,9 +14,16 @@ class Command(BaseCommand):
         # Create FAQ Categories
         categories_data = [
             {
+                'name': 'General Questions',
+                'slug': 'general',
+                'description': 'General information about Lawa Agent Studio',
+                'icon': 'Question',
+                'order': 0
+            },
+            {
                 'name': 'Getting Started',
                 'slug': 'getting-started',
-                'description': 'Basic questions about setting up and using Webbotify',
+                'description': 'Basic questions about setting up and using Lawa Agent Studio',
                 'icon': 'Rocket',
                 'order': 1
             },
@@ -62,6 +69,44 @@ class Command(BaseCommand):
 
         # Create FAQs
         faqs_data = [
+            # General Questions
+            {
+                'category': 'general',
+                'question': 'What is Lawa Agent Studio?',
+                'answer': '''Lawa Agent Studio is an AI-powered platform that enables you to create custom chatbots for your website in minutes. By indexing your website content, we create intelligent agents that can answer visitor questions accurately and instantly.''',
+                'is_featured': True,
+                'order': 1,
+                'tags': ['about', 'platform', 'overview']
+            },
+            {
+                'category': 'general',
+                'question': 'Is my data secure?',
+                'answer': '''Yes, security is our top priority. We use enterprise-grade encryption for all data in transit and at rest. We do not share your data with third parties, and your indexed content is only used to power your specific chatbot.''',
+                'order': 2,
+                'tags': ['security', 'privacy', 'data']
+            },
+             {
+                'category': 'general',
+                'question': 'Which languages do you support?',
+                'answer': '''Lawa Agent Studio supports over 95 languages. The chatbot automatically detects the user's language and responds in the same language, utilizing the knowledge from your website regardless of its original language.''',
+                'order': 3,
+                'tags': ['languages', 'multilingual', 'support']
+            },
+            {
+                'category': 'general',
+                'question': 'Can I export my chat data?',
+                'answer': '''Yes, you can export all conversation logs and lead data from your dashboard. We support CSV and JSON export formats for easy integration with your CRM or other tools.''',
+                'order': 4,
+                'tags': ['export', 'data', 'csv']
+            },
+            {
+                'category': 'general',
+                'question': 'Do I need to know how to code?',
+                'answer': '''No coding skills are required! You can create, customize, and deploy your chatbot entirely through our user-friendly dashboard. Integration is as simple as copying and pasting a single line of code.''',
+                'order': 5,
+                'tags': ['no-code', 'easy', 'setup']
+            },
+
             # Getting Started
             {
                 'category': 'getting-started',
@@ -103,7 +148,7 @@ You can monitor indexing progress in real-time from your project dashboard.''',
             {
                 'category': 'getting-started',
                 'question': 'What types of content can be indexed?',
-                'answer': '''Webbotify can index various content types:
+                'answer': '''Lawa Agent Studio can index various content types:
 
 **Supported Content:**
 - HTML web pages
@@ -159,18 +204,20 @@ Access these settings from your chatbot's Settings page.''',
 
 **Example embed code:**
 ```html
-<script src="https://cdn.webbotify.com/widget.js"></script>
-<script>
-  WebbotifyWidget.init({
-    apiKey: 'your-api-key',
-    theme: 'auto'
-  });
+<script
+  src="https://your-widget-url/widget.js"
+  data-api-key="your-api-key"
+  data-chatbot-name="My Assistant"
+  data-theme="auto"
+  data-position="bottom-right"
+  async>
 </script>
 ```
 
 **Placement Tips:**
 - Add the code just before the closing `</body>` tag
 - The widget will automatically appear in the configured position
+- All configuration is done via data attributes
 - Test on a staging environment first''',
                 'order': 2,
                 'tags': ['embed', 'integration', 'website']
@@ -297,21 +344,27 @@ Check the Usage page in your dashboard for current consumption.''',
 
 **Check These First:**
 1. **Embed code placement**: Ensure it's before `</body>`
-2. **API key**: Verify the API key is correct
+2. **API key**: Verify the data-api-key attribute is correct
 3. **Console errors**: Check browser dev tools for errors
 4. **Ad blockers**: Some may block the widget
 5. **CORS issues**: Ensure your domain is allowed
 
 **Common Fixes:**
-```javascript
-// Make sure init is called after the script loads
-<script src="https://cdn.webbotify.com/widget.js"></script>
-<script>
-  document.addEventListener('DOMContentLoaded', function() {
-    WebbotifyWidget.init({ apiKey: 'your-key' });
-  });
+```html
+<!-- Make sure the script tag has all required attributes -->
+<script
+  src="https://your-widget-url/widget.js"
+  data-api-key="your-api-key"
+  data-chatbot-name="My Assistant"
+  data-theme="auto"
+  async>
 </script>
 ```
+
+**Verify:**
+- The script src URL is correct and accessible
+- The data-api-key matches your chatbot's API key
+- No JavaScript errors in the console
 
 If issues persist, contact support with your browser console output.''',
                 'order': 1,
@@ -383,18 +436,18 @@ Contact support if the problem persists after restarting.''',
         # Create Help Articles
         articles_data = [
             {
-                'title': 'Getting Started with Webbotify',
+                'title': 'Getting Started with Lawa Agent Studio',
                 'slug': 'getting-started-guide',
                 'article_type': 'getting_started',
                 'icon': 'Rocket',
                 'summary': 'Learn how to set up your first AI chatbot in minutes',
-                'content': '''# Getting Started with Webbotify
+                'content': '''# Getting Started with Lawa Agent Studio
 
-Welcome to Webbotify! This guide will help you create your first AI-powered chatbot in just a few minutes.
+Welcome to Lawa Agent Studio! This guide will help you create your first AI-powered chatbot in just a few minutes.
 
 ## Step 1: Create Your Account
 
-If you haven't already, sign up for a Webbotify account. You can start with our free trial to explore all features.
+If you haven't already, sign up for a Lawa Agent Studio account. You can start with our free trial to explore all features.
 
 ## Step 2: Create a Project
 
@@ -405,7 +458,7 @@ If you haven't already, sign up for a Webbotify account. You can start with our 
 
 ## Step 3: Index Your Website
 
-Once your project is created, Webbotify will automatically begin indexing your website content. This process:
+Once your project is created, Lawa Agent Studio will automatically begin indexing your website content. This process:
 
 - Crawls all accessible pages on your site
 - Extracts and processes text content
@@ -432,6 +485,7 @@ Copy the embed code from your chatbot settings and add it to your website. The w
 - [Learn about advanced indexing options](/help-center/advanced-indexing)
 - [Set up analytics tracking](/help-center/analytics-setup)
 ''',
+                'category_slug': 'getting-started',
                 'is_featured': True,
                 'order': 1,
                 'tags': ['beginner', 'setup', 'tutorial']
@@ -491,8 +545,9 @@ Keep it friendly and set expectations about what the chatbot can help with.
 - **Balanced**: Moderate detail (recommended)
 - **Detailed**: Comprehensive explanations
 ''',
+                'category_slug': 'chatbot-configuration',
                 'is_featured': True,
-                'order': 2,
+                'order': 1,
                 'tags': ['customization', 'branding', 'design']
             },
             {
@@ -500,7 +555,7 @@ Keep it friendly and set expectations about what the chatbot can help with.
                 'slug': 'understanding-indexing',
                 'article_type': 'guide',
                 'icon': 'Database',
-                'summary': 'Learn how Webbotify indexes your website content for AI-powered responses',
+                'summary': 'Learn how Lawa Agent Studio indexes your website content for AI-powered responses',
                 'content': '''# Understanding Website Indexing
 
 Website indexing is the process of crawling and processing your website content so your chatbot can answer questions accurately.
@@ -550,7 +605,8 @@ When enabled, we'll extract and index content from PDF files linked on your site
 3. **Link important pages** - Make sure key content is discoverable
 4. **Re-index regularly** - Keep content fresh after updates
 ''',
-                'order': 3,
+                'category_slug': 'indexing-content',
+                'order': 1,
                 'tags': ['indexing', 'crawling', 'content']
             },
             {
@@ -584,12 +640,14 @@ Paste the code just before the closing `</body>` tag:
 <body>
   <!-- Your website content -->
 
-  <!-- Webbotify Chat Widget -->
-  <script src="https://cdn.webbotify.com/widget.js"></script>
-  <script>
-    WebbotifyWidget.init({
-      apiKey: 'your-api-key-here'
-    });
+  <!-- Lawa Agent Studio Chat Widget -->
+  <script
+    src="https://your-widget-url/widget.js"
+    data-api-key="your-api-key-here"
+    data-chatbot-name="My Assistant"
+    data-theme="auto"
+    data-position="bottom-right"
+    async>
   </script>
 </body>
 </html>
@@ -597,15 +655,18 @@ Paste the code just before the closing `</body>` tag:
 
 ## Configuration Options
 
-```javascript
-WebbotifyWidget.init({
-  apiKey: 'your-api-key',      // Required
-  theme: 'auto',               // 'light', 'dark', or 'auto'
-  position: 'bottom-right',    // Widget position
-  primaryColor: '#3b82f6',     // Override primary color
-  welcomeMessage: 'Hello!'     // Override welcome message
-});
-```
+All configuration is done via `data-*` attributes on the script tag:
+
+| Attribute | Description | Values |
+|-----------|-------------|--------|
+| `data-api-key` | Your chatbot API key (required) | String |
+| `data-chatbot-name` | Display name for the chatbot | String |
+| `data-theme` | Color theme | `light`, `dark`, `auto` |
+| `data-position` | Widget position | `bottom-right`, `bottom-left` |
+| `data-primary-color` | Brand color (hex) | e.g., `#3b82f6` |
+| `data-text-color` | Text color (hex) | e.g., `#ffffff` |
+| `data-greeting` | Welcome message | String |
+| `data-placeholder` | Input placeholder | String |
 
 ## Platform-Specific Guides
 
@@ -619,11 +680,16 @@ Add to your theme.liquid file before `</body>`.
 ```jsx
 useEffect(() => {
   const script = document.createElement('script');
-  script.src = 'https://cdn.webbotify.com/widget.js';
-  script.onload = () => {
-    window.WebbotifyWidget.init({ apiKey: 'your-key' });
-  };
+  script.src = 'https://your-widget-url/widget.js';
+  script.setAttribute('data-api-key', 'your-api-key');
+  script.setAttribute('data-chatbot-name', 'My Assistant');
+  script.setAttribute('data-theme', 'auto');
+  script.async = true;
   document.body.appendChild(script);
+  
+  return () => {
+    document.body.removeChild(script);
+  };
 }, []);
 ```
 
@@ -631,24 +697,325 @@ useEffect(() => {
 
 If the widget doesn't appear:
 1. Check browser console for errors
-2. Verify the API key is correct
-3. Ensure the script loads before init is called
+2. Verify the `data-api-key` attribute is correct
+3. Ensure the script src URL is accessible
 4. Disable ad blockers temporarily to test
 ''',
+                'category_slug': 'chatbot-configuration',
                 'is_featured': True,
-                'order': 4,
+                'order': 2,
                 'tags': ['embed', 'installation', 'integration']
+            },
+            # Indexing & Content Articles
+            {
+                'title': 'Re-indexing Your Website',
+                'slug': 'reindexing-website',
+                'article_type': 'guide',
+                'icon': 'Database',
+                'summary': 'How to update your chatbot knowledge when your website content changes',
+                'content': '''# Re-indexing Your Website
+
+Keep your chatbot up-to-date with the latest content from your website.
+
+## When to Re-index
+
+Re-index your website when:
+- You've added new pages or content
+- Existing content has been updated
+- You've removed outdated pages
+- Product information has changed
+
+## How to Re-index
+
+1. Navigate to your **Project Dashboard**
+2. Go to the **Indexing** tab
+3. Click **Re-index Website**
+4. Monitor progress in the job list
+
+## Indexing Options
+
+| Option | Description |
+|--------|-------------|
+| Full Re-index | Crawls all pages from scratch |
+| Incremental | Only updates changed pages (faster) |
+| Specific URLs | Index only selected pages |
+
+## Best Practices
+
+- Schedule regular re-indexing for frequently updated sites
+- Re-index after major content updates
+- Check the indexing report for any failed pages
+''',
+                'category_slug': 'indexing-content',
+                'order': 1,
+                'tags': ['indexing', 'update', 'content']
+            },
+            {
+                'title': 'Optimizing Content for Better Answers',
+                'slug': 'optimizing-content',
+                'article_type': 'guide',
+                'icon': 'Database',
+                'summary': 'Structure your website content for more accurate chatbot responses',
+                'content': '''# Optimizing Content for Better Answers
+
+Help your chatbot provide more accurate and helpful responses.
+
+## Content Structure Tips
+
+### Use Clear Headings
+- Break content into logical sections
+- Use H2 and H3 tags for sub-topics
+- Make headings descriptive
+
+### Write Concise Paragraphs
+- Keep paragraphs focused on one topic
+- Avoid long walls of text
+- Use bullet points for lists
+
+### Include FAQs on Your Site
+- Create dedicated FAQ pages
+- Use question-answer format
+- Cover common customer queries
+
+## What to Avoid
+
+- **Duplicate content** - Confuses the AI
+- **Images without alt text** - Text in images isn't indexed
+- **Complex navigation** - Orphan pages may not be found
+- **Login-protected content** - Cannot be crawled
+
+## Testing Your Content
+
+After indexing, test by asking your chatbot questions about:
+- Recently added content
+- Specific product details
+- FAQ topics
+''',
+                'category_slug': 'indexing-content',
+                'order': 2,
+                'tags': ['content', 'optimization', 'accuracy']
+            },
+            # Billing & Usage Articles
+            {
+                'title': 'Understanding Your Usage Dashboard',
+                'slug': 'usage-dashboard',
+                'article_type': 'guide',
+                'icon': 'CreditCard',
+                'summary': 'Monitor your chatbot usage, message counts, and plan limits',
+                'content': '''# Understanding Your Usage Dashboard
+
+Track your resource consumption and stay within plan limits.
+
+## Accessing the Dashboard
+
+Navigate to **Settings > Usage** to view your current usage.
+
+## Key Metrics
+
+### Messages
+- **Messages Used**: Total messages this billing period
+- **Message Limit**: Maximum allowed by your plan
+- **Usage %**: Percentage of limit consumed
+
+### Projects & Chatbots
+- **Active Projects**: Number of indexed websites
+- **Active Chatbots**: Deployed chatbot widgets
+- **Pages Indexed**: Total pages across all projects
+
+## Usage Alerts
+
+Set up alerts to notify you when:
+- Usage reaches 80% of limit
+- Usage reaches 90% of limit
+- You're approaching page limits
+
+## Upgrading Your Plan
+
+If you're consistently hitting limits:
+1. Go to **Settings > Billing**
+2. Click **Upgrade Plan**
+3. Choose a plan with higher limits
+4. Confirm the upgrade
+
+Changes take effect immediately.
+''',
+                'category_slug': 'billing-usage',
+                'order': 1,
+                'tags': ['usage', 'billing', 'limits']
+            },
+            {
+                'title': 'Managing Your Subscription',
+                'slug': 'managing-subscription',
+                'article_type': 'guide',
+                'icon': 'CreditCard',
+                'summary': 'Upgrade, downgrade, or cancel your subscription',
+                'content': '''# Managing Your Subscription
+
+Control your plan and billing settings.
+
+## Current Plan
+
+View your current plan details at **Settings > Billing**.
+
+## Upgrading
+
+To upgrade your plan:
+1. Go to **Settings > Billing**
+2. Click **Change Plan**
+3. Select a higher tier
+4. Confirm payment
+
+Upgrades are prorated - you only pay the difference.
+
+## Downgrading
+
+To downgrade:
+1. Ensure usage is within new plan limits
+2. Go to **Settings > Billing**
+3. Select a lower tier
+4. Downgrade takes effect at next billing cycle
+
+## Cancellation
+
+To cancel your subscription:
+1. Go to **Settings > Billing**
+2. Click **Cancel Subscription**
+3. Your access continues until the billing period ends
+
+## Payment Methods
+
+Update your payment method:
+1. Go to **Settings > Billing**
+2. Click **Update Payment Method**
+3. Enter new card details
+''',
+                'category_slug': 'billing-usage',
+                'order': 2,
+                'tags': ['subscription', 'billing', 'payment']
+            },
+            # Troubleshooting Articles
+            {
+                'title': 'Common Issues and Solutions',
+                'slug': 'common-issues',
+                'article_type': 'troubleshooting',
+                'icon': 'AlertTriangle',
+                'summary': 'Quick fixes for the most frequently encountered problems',
+                'content': '''# Common Issues and Solutions
+
+Quick solutions for frequently encountered problems.
+
+## Widget Not Appearing
+
+**Symptoms**: Chat bubble doesn't show on your website
+
+**Solutions**:
+1. Check embed code is before `</body>`
+2. Verify `data-api-key` is correct
+3. Check browser console for errors
+4. Disable ad blockers temporarily
+
+## Incorrect Answers
+
+**Symptoms**: Chatbot gives wrong or outdated information
+
+**Solutions**:
+1. Re-index your website
+2. Check if source pages have correct content
+3. Verify pages were indexed (check index report)
+4. Adjust response length settings
+
+## Slow Responses
+
+**Symptoms**: Chatbot takes too long to respond
+
+**Solutions**:
+1. Check your internet connection
+2. Try refreshing the page
+3. Check service status page
+4. Contact support if issue persists
+
+## Indexing Failures
+
+**Symptoms**: Pages show as failed in index report
+
+**Solutions**:
+1. Verify pages are publicly accessible
+2. Check robots.txt isn't blocking
+3. Ensure pages load quickly
+4. Try indexing specific URLs manually
+''',
+                'category_slug': 'troubleshooting',
+                'is_featured': True,
+                'order': 1,
+                'tags': ['troubleshooting', 'issues', 'fixes']
+            },
+            {
+                'title': 'Debugging Widget Issues',
+                'slug': 'debugging-widget',
+                'article_type': 'troubleshooting',
+                'icon': 'AlertTriangle',
+                'summary': 'Step-by-step guide to diagnose and fix widget problems',
+                'content': '''# Debugging Widget Issues
+
+Diagnose and resolve chat widget problems.
+
+## Browser Developer Tools
+
+Open DevTools (F12 or right-click > Inspect):
+
+### Console Tab
+Look for:
+- JavaScript errors (red text)
+- Network errors
+- CORS warnings
+
+### Network Tab
+Check:
+- Widget script loaded successfully (200 status)
+- WebSocket connection established
+- API requests returning data
+
+## Common Error Messages
+
+### "API key not found"
+- Verify `data-api-key` attribute
+- Check chatbot is active in dashboard
+- Regenerate API key if needed
+
+### "Connection failed"
+- Check internet connectivity
+- Verify API URLs are accessible
+- Check firewall/VPN settings
+
+### "CORS error"
+- Ensure your domain is allowed
+- Contact support if domain is correct
+
+## Testing Checklist
+
+✅ Script src URL is correct
+✅ data-api-key matches dashboard
+✅ No JavaScript errors in console
+✅ Network requests are successful
+✅ WebSocket connects properly
+''',
+                'category_slug': 'troubleshooting',
+                'order': 2,
+                'tags': ['debugging', 'widget', 'errors']
             },
         ]
 
-        # Create or get a general category for articles
-        general_cat, _ = FAQCategory.objects.get_or_create(
-            slug='general',
-            defaults={'name': 'General', 'order': 0}
-        )
-
+        # Assign articles to their proper categories
         for article_data in articles_data:
-            article_data['category'] = general_cat
+            category_slug = article_data.pop('category_slug', 'general')
+            category = categories.get(category_slug)
+            if not category:
+                # Fallback to general category
+                category, _ = FAQCategory.objects.get_or_create(
+                    slug='general',
+                    defaults={'name': 'General', 'order': 0}
+                )
+            article_data['category'] = category
             article, created = HelpArticle.objects.update_or_create(
                 slug=article_data['slug'],
                 defaults=article_data
@@ -657,3 +1024,4 @@ If the widget doesn't appear:
             self.stdout.write(f'  {status} article: {article.title}')
 
         self.stdout.write(self.style.SUCCESS('Successfully seeded support data!'))
+

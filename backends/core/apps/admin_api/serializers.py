@@ -613,12 +613,335 @@ class AdminLoginSerializer(serializers.Serializer):
 
 class AdminUserSerializer(serializers.ModelSerializer):
     """Serializer for admin user data in login response"""
+    has_2fa = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'email', 'name', 'username',
             'is_staff', 'is_superuser', 'is_active',
-            'created_at', 'last_login'
+            'created_at', 'last_login', 'has_2fa'
         ]
         read_only_fields = fields
+
+    def get_has_2fa(self, obj):
+        from apps.admin_api.models import Admin2FA
+        return Admin2FA.is_2fa_enabled(obj)
+
+
+# ===========================================
+# 2FA Serializers
+# ===========================================
+
+class TwoFactorSetupSerializer(serializers.Serializer):
+    """Response serializer for 2FA setup initiation"""
+    secret = serializers.CharField(read_only=True)
+    qr_code = serializers.CharField(read_only=True, help_text="Base64 encoded QR code image")
+    provisioning_uri = serializers.CharField(read_only=True)
+
+
+class TwoFactorVerifySerializer(serializers.Serializer):
+    """Serializer for verifying 2FA code"""
+    code = serializers.CharField(
+        min_length=6,
+        max_length=6,
+        help_text="6-digit TOTP code from authenticator app"
+    )
+
+    def validate_code(self, value):
+        # Only digits allowed
+        if not value.isdigit():
+            raise serializers.ValidationError("Code must contain only digits")
+        return value
+
+
+class TwoFactorDisableSerializer(serializers.Serializer):
+    """Serializer for disabling 2FA"""
+    code = serializers.CharField(
+        min_length=6,
+        max_length=8,
+        help_text="Current TOTP code or backup code"
+    )
+    password = serializers.CharField(
+        write_only=True,
+        help_text="Current password for confirmation"
+    )
+
+
+class TwoFactorStatusSerializer(serializers.Serializer):
+    """Serializer for 2FA status response"""
+    is_enabled = serializers.BooleanField()
+    enabled_at = serializers.DateTimeField(allow_null=True)
+    last_used_at = serializers.DateTimeField(allow_null=True)
+    backup_codes_remaining = serializers.IntegerField()
+
+
+class TwoFactorLoginSerializer(serializers.Serializer):
+    """Serializer for 2FA verification during login"""
+    temp_token = serializers.CharField(
+        help_text="Temporary token from initial login"
+    )
+    code = serializers.CharField(
+        min_length=6,
+        max_length=8,
+        help_text="6-digit TOTP code or 8-character backup code"
+    )
+
+
+class BackupCodesResponseSerializer(serializers.Serializer):
+    """Response serializer for backup codes generation"""
+    backup_codes = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="One-time backup codes (store securely, shown only once)"
+    )
+    message = serializers.CharField()
+
+
+# ===========================================
+# Alerting System Serializers
+# ===========================================
+
+class AlertRuleSerializer(serializers.ModelSerializer):
+    """Serializer for alert rules"""
+    alert_type_display = serializers.CharField(source='get_alert_type_display', read_only=True)
+    severity_display = serializers.CharField(source='get_severity_display', read_only=True)
+    channel_display = serializers.CharField(source='get_notification_channel_display', read_only=True)
+    created_by_email = serializers.CharField(source='created_by.email', read_only=True, allow_null=True)
+    notifications_count = serializers.SerializerMethodField()
+    last_triggered = serializers.SerializerMethodField()
+
+    class Meta:
+        from apps.admin_api.models import AlertRule
+        model = AlertRule
+        fields = [
+            'id', 'name', 'description',
+            'alert_type', 'alert_type_display',
+            'severity', 'severity_display',
+            'conditions',
+            'notification_channel', 'channel_display', 'notification_target',
+            'cooldown_minutes', 'is_enabled',
+            'created_by', 'created_by_email',
+            'notifications_count', 'last_triggered',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def get_notifications_count(self, obj):
+        return obj.notifications.count()
+
+    def get_last_triggered(self, obj):
+        last = obj.notifications.order_by('-sent_at').first()
+        return last.sent_at if last else None
+
+
+class AlertRuleCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating alert rules"""
+    class Meta:
+        from apps.admin_api.models import AlertRule
+        model = AlertRule
+        fields = [
+            'name', 'description', 'alert_type', 'severity',
+            'conditions', 'notification_channel', 'notification_target',
+            'cooldown_minutes', 'is_enabled'
+        ]
+
+    def validate_conditions(self, value):
+        alert_type = self.initial_data.get('alert_type')
+
+        if alert_type == 'failed_logins':
+            if 'threshold' not in value:
+                value['threshold'] = 5
+            if 'time_window_minutes' not in value:
+                value['time_window_minutes'] = 10
+
+        elif alert_type == 'job_failures':
+            if 'threshold' not in value:
+                value['threshold'] = 3
+            if 'time_window_hours' not in value:
+                value['time_window_hours'] = 1
+
+        return value
+
+    def validate_notification_target(self, value):
+        channel = self.initial_data.get('notification_channel')
+
+        if channel == 'email':
+            if '@' not in value:
+                raise serializers.ValidationError("Invalid email address")
+
+        elif channel in ['webhook', 'slack']:
+            if not value.startswith('http'):
+                raise serializers.ValidationError("Invalid URL")
+
+        return value
+
+
+class AlertNotificationSerializer(serializers.ModelSerializer):
+    """Serializer for alert notifications"""
+    rule_name = serializers.CharField(source='rule.name', read_only=True)
+    severity_display = serializers.CharField(source='get_severity_display', read_only=True)
+
+    class Meta:
+        from apps.admin_api.models import AlertNotification
+        model = AlertNotification
+        fields = [
+            'id', 'rule', 'rule_name',
+            'title', 'message', 'severity', 'severity_display',
+            'sent_at', 'delivered', 'delivery_error',
+            'context'
+        ]
+        read_only_fields = fields
+
+
+class SystemAlertSerializer(serializers.ModelSerializer):
+    """Serializer for system alerts displayed in dashboard"""
+    level_display = serializers.CharField(source='get_level_display', read_only=True)
+    acknowledged_by_email = serializers.CharField(
+        source='acknowledged_by.email', read_only=True, allow_null=True
+    )
+
+    class Meta:
+        from apps.admin_api.models import SystemAlert
+        model = SystemAlert
+        fields = [
+            'id', 'title', 'message', 'level', 'level_display',
+            'related_type', 'related_id',
+            'is_active', 'is_acknowledged',
+            'acknowledged_by', 'acknowledged_by_email', 'acknowledged_at',
+            'auto_resolve', 'resolved_at',
+            'created_at', 'expires_at'
+        ]
+        read_only_fields = fields
+
+
+class SystemAlertCreateSerializer(serializers.Serializer):
+    """Serializer for creating manual system alerts"""
+    title = serializers.CharField(max_length=255)
+    message = serializers.CharField()
+    level = serializers.ChoiceField(
+        choices=['info', 'warning', 'error', 'critical'],
+        default='warning'
+    )
+    related_type = serializers.CharField(max_length=50, required=False, default='')
+    related_id = serializers.CharField(max_length=100, required=False, default='')
+    expires_hours = serializers.IntegerField(min_value=1, max_value=720, default=24)
+
+
+class SystemAlertAcknowledgeSerializer(serializers.Serializer):
+    """Serializer for acknowledging system alerts"""
+    pass  # No input needed, user is taken from request
+
+
+class AlertStatsSerializer(serializers.Serializer):
+    """Serializer for alert statistics"""
+    active_alerts = serializers.IntegerField()
+    critical_alerts = serializers.IntegerField()
+    warning_alerts = serializers.IntegerField()
+    alerts_today = serializers.IntegerField()
+    alerts_this_week = serializers.IntegerField()
+    enabled_rules = serializers.IntegerField()
+    total_rules = serializers.IntegerField()
+
+
+# =====================
+# Announcement Serializers
+# =====================
+
+class AnnouncementListSerializer(serializers.Serializer):
+    """Serializer for announcement list"""
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    message = serializers.CharField()
+    announcement_type = serializers.CharField()
+    style = serializers.CharField()
+    is_active = serializers.BooleanField()
+    is_dismissible = serializers.BooleanField()
+    starts_at = serializers.DateTimeField()
+    expires_at = serializers.DateTimeField()
+    created_at = serializers.DateTimeField()
+    view_count = serializers.IntegerField()
+    dismiss_count = serializers.IntegerField()
+
+
+class AnnouncementDetailSerializer(serializers.Serializer):
+    """Serializer for announcement detail"""
+    id = serializers.UUIDField(read_only=True)
+    title = serializers.CharField()
+    message = serializers.CharField()
+    announcement_type = serializers.ChoiceField(choices=['banner', 'modal', 'toast'])
+    style = serializers.ChoiceField(choices=['info', 'warning', 'success', 'error'])
+    link_url = serializers.URLField(required=False, allow_blank=True)
+    link_text = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    is_dismissible = serializers.BooleanField(default=True)
+    show_to_all = serializers.BooleanField(default=True)
+    target_tiers = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    is_active = serializers.BooleanField(default=True)
+    starts_at = serializers.DateTimeField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+    view_count = serializers.IntegerField(read_only=True)
+    dismiss_count = serializers.IntegerField(read_only=True)
+    created_by_email = serializers.SerializerMethodField()
+
+    def get_created_by_email(self, obj):
+        return obj.created_by.email if obj.created_by else None
+
+    def get_style(self, obj):
+        return obj.get_style_display()
+
+
+class AnnouncementCreateSerializer(serializers.Serializer):
+    """Serializer for creating announcements"""
+    title = serializers.CharField(max_length=255)
+    message = serializers.CharField()
+    announcement_type = serializers.ChoiceField(
+        choices=['banner', 'modal', 'toast'],
+        default='banner'
+    )
+    style = serializers.ChoiceField(
+        choices=['info', 'warning', 'success', 'error'],
+        default='info'
+    )
+    link_url = serializers.URLField(required=False, allow_blank=True)
+    link_text = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    is_dismissible = serializers.BooleanField(default=True)
+    show_to_all = serializers.BooleanField(default=True)
+    target_tiers = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True
+    )
+    is_active = serializers.BooleanField(default=True)
+    starts_at = serializers.DateTimeField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+# =====================
+# Feature Flag Serializers
+# =====================
+
+class FeatureFlagSerializer(serializers.ModelSerializer):
+    """Serializer for feature flags"""
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    
+    class Meta:
+        from apps.admin_api.models import FeatureFlag
+        model = FeatureFlag
+        fields = [
+            'id', 'key', 'name', 'description', 'is_enabled', 
+            'rollout_strategy', 'target_tiers', 'rollout_percentage', 
+            'target_user_ids', 'environment', 'created_by', 'created_by_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def validate_key(self, value):
+        from apps.admin_api.models import FeatureFlag
+        # Check uniqueness but exclude current instance if updating
+        qs = FeatureFlag.objects.filter(key=value)
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+        if qs.exists():
+            raise serializers.ValidationError("A feature flag with this key already exists.")
+        return value

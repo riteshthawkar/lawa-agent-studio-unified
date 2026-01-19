@@ -8,13 +8,17 @@ from .models import FAQ, FAQCategory, Feedback, HelpArticle
 class FAQCategorySerializer(serializers.ModelSerializer):
     """Serializer for FAQ categories"""
     faq_count = serializers.SerializerMethodField()
+    article_count = serializers.SerializerMethodField()
 
     class Meta:
         model = FAQCategory
-        fields = ['id', 'name', 'slug', 'description', 'icon', 'order', 'faq_count']
+        fields = ['id', 'name', 'slug', 'description', 'icon', 'order', 'faq_count', 'article_count']
 
     def get_faq_count(self, obj):
         return obj.faqs.filter(is_active=True).count()
+
+    def get_article_count(self, obj):
+        return obj.articles.filter(is_active=True).count()
 
 
 class FAQSerializer(serializers.ModelSerializer):
@@ -81,9 +85,10 @@ class FeedbackSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'feedback_type', 'feedback_type_display', 'subject', 'message',
             'status', 'status_display', 'priority', 'created_at', 'updated_at',
-            'page_url', 'steps_to_reproduce', 'expected_behavior', 'actual_behavior'
+            'page_url', 'steps_to_reproduce', 'expected_behavior', 'actual_behavior',
+            'admin_notes'
         ]
-        read_only_fields = ['status', 'priority']
+        read_only_fields = ['status', 'priority', 'admin_notes']
 
 
 class HelpArticleListSerializer(serializers.ModelSerializer):

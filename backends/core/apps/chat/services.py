@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import ChatSession, ChatMessage
 from apps.chatbot.models import Chatbot
 from apps.core.exceptions import QuotaExceeded
+from apps.usage.services import QuotaService, QuotaLimitExceeded
 
 
 class ChatbotService:
@@ -18,8 +19,16 @@ class ChatbotService:
     def send_message(self, session, user_message, chatbot):
         """Send message to external chatbot service and get response"""
         
-        # Check quotas (simplified for MVP)
-        # TODO: Implement proper quota checking
+        if not chatbot or not chatbot.site:
+            raise ValueError("Invalid chatbot configuration")
+
+        # Check quotas
+        if chatbot.site.organization:
+            org = chatbot.site.organization
+            is_limit_reached, _, _ = QuotaService.check_daily_conversation_limit(org)
+            if is_limit_reached:
+                # logger.warning(f"Quota exceeded for organization {org.id} in ChatbotService")
+                raise QuotaExceeded("Daily conversation limit reached")
         
         default_model_provider = getattr(settings, 'CHATBOT_DEFAULT_MODEL_PROVIDER', 'openai')
         default_model_name = getattr(settings, 'CHATBOT_DEFAULT_MODEL_NAME', 'gpt-4o')

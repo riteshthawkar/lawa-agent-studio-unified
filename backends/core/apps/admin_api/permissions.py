@@ -309,19 +309,19 @@ class CanPerformBulkOperations(permissions.BasePermission):
     - Bulk user suspend/activate/delete
     - Bulk feedback updates
     - Mass data exports
+    
+    Note: All authenticated staff users can perform bulk operations.
+    The admin login already validates staff status.
     """
-    message = "Bulk operations permission required."
+    message = "Bulk operations permission required. You must be an admin user."
 
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated and request.user.is_staff):
             return False
 
-        # Only superusers and user managers can do bulk operations
-        if request.user.is_superuser:
-            return True
-
-        roles = get_admin_roles(request.user)
-        return AdminRole.USER_MANAGER in roles
+        # All staff users can perform bulk operations
+        # The admin login already validates admin privileges
+        return True
 
 
 class CanExportData(permissions.BasePermission):

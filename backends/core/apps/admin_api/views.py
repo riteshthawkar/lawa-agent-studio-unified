@@ -129,6 +129,31 @@ def admin_login(request):
 
     user = serializer.validated_data['user']
 
+    # Check if 2FA is enabled
+    from apps.admin_api.models import Admin2FA
+    from django.core.cache import cache
+    import secrets
+
+    if Admin2FA.is_2fa_enabled(user):
+        # 2FA is enabled - return temp token for 2FA verification
+        temp_token = secrets.token_urlsafe(32)
+
+        # Store user ID in cache with temp token (expires in 5 minutes)
+        cache_key = f'admin_2fa_pending_{temp_token}'
+        cache.set(cache_key, {'user_id': str(user.id)}, timeout=300)
+
+        logger.info(
+            f"Admin login requires 2FA for {user.email} from {client_ip}",
+            extra={'user_id': str(user.id), 'email': user.email, 'ip': client_ip}
+        )
+
+        return Response({
+            'requires_2fa': True,
+            'temp_token': temp_token,
+            'message': 'Two-factor authentication required. Please provide your 2FA code.'
+        })
+
+    # No 2FA - proceed with normal login
     # Generate JWT tokens
     refresh = RefreshToken.for_user(user)
     access_token = refresh.access_token
@@ -175,12 +200,15 @@ def admin_login(request):
             'access': str(access_token),
             'refresh': str(refresh),
         },
-        'is_admin': True
+        'is_admin': True,
+        'requires_2fa': False
     })
 
 
 class AdminStatsViews(viewsets.ViewSet):
-    permission_classes = [IsAdminUser]
+    """Admin statistics endpoints with rate limiting."""
+    permission_classes = [IsAdminUser, AdminIPAllowlist]
+    throttle_classes = [AdminRateThrottle, AdminBurstThrottle]
 
     @action(detail=False, methods=['get'])
     def overview(self, request):
@@ -215,10 +243,15 @@ class UserViewSet(viewsets.ModelViewSet):
     """
     Admin user management with full CRUD capabilities.
     Supports filtering, searching, and admin actions.
+
+    Rate limits:
+        - 100 requests/minute for general operations
+        - 30 requests/minute burst protection
     """
     queryset = User.objects.all().order_by('-created_at')
     serializer_class = UserListSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdminUser, AdminIPAllowlist]
+    throttle_classes = [AdminRateThrottle, AdminBurstThrottle]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'is_active', 'is_staff', 'is_email_verified']
     search_fields = ['email', 'name']
@@ -434,10 +467,15 @@ class UserViewSet(viewsets.ModelViewSet):
 class OrganizationViewSet(viewsets.ModelViewSet):
     """
     Admin organization management with quota control.
+
+    Rate limits:
+        - 100 requests/minute for general operations
+        - 30 requests/minute burst protection
     """
     queryset = Organization.objects.all().order_by('-created_at')
     serializer_class = OrganizationListSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAdminUser, AdminIPAllowlist]
+    throttle_classes = [AdminRateThrottle, AdminBurstThrottle]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'plan_tier']
     search_fields = ['name', 'slug']
@@ -661,9 +699,16 @@ def job_action(request, job_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])
+@permission_classes([CanExportData, AdminIPAllowlist])
+@throttle_classes([AdminExportThrottle])
 def export_jobs(request):
-    """Export jobs to CSV"""
+    """
+    Export jobs to CSV.
+
+    Security:
+        - Requires export permission
+        - Rate limited to 5/hour
+    """
     jobs = IndexingJob.objects.all().order_by('-created_at')
 
     # Apply filters
@@ -849,9 +894,17 @@ def audit_logs(request):
 # =====================
 
 @api_view(['POST'])
-@permission_classes([IsAdminUser])
+@permission_classes([CanPerformBulkOperations, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
 def bulk_user_action(request):
-    """Perform bulk actions on multiple users"""
+    """
+    Perform bulk actions on multiple users.
+
+    Security:
+        - Requires bulk operations permission
+        - Rate limited to 10/hour
+        - All actions are logged
+    """
     serializer = BulkActionSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     
@@ -899,9 +952,17 @@ def bulk_user_action(request):
 # =====================
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])
+@permission_classes([CanExportData, AdminIPAllowlist])
+@throttle_classes([AdminExportThrottle])
 def export_users(request):
-    """Export users to CSV"""
+    """
+    Export users to CSV.
+
+    Security:
+        - Requires export permission
+        - Rate limited to 5/hour to prevent data exfiltration
+        - Action is logged
+    """
     users = User.objects.all().order_by('-created_at')
     
     # Apply filters
@@ -953,23 +1014,45 @@ def export_users(request):
 # =====================
 
 @api_view(['POST'])
-@permission_classes([IsAdminUser])
+@permission_classes([CanImpersonate, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
 def impersonate_user(request, user_id):
-    """Generate a temporary impersonation token for a user"""
+    """
+    Generate a temporary impersonation token for a user.
+
+    Security measures:
+        - Requires CanImpersonate permission (superuser or explicit permission)
+        - Rate limited to 10/hour
+        - Short token expiry (15 minutes)
+        - Full audit logging
+        - IP allowlist check
+    """
     from rest_framework_simplejwt.tokens import RefreshToken
-    
+
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
         return Response({'error': 'User not found'}, status=404)
-    
+
+    # Prevent impersonating other admins (security measure)
+    if user.is_staff and not request.user.is_superuser:
+        return Response(
+            {'error': 'Cannot impersonate admin users. Superuser required.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     # Generate tokens for the target user
     refresh = RefreshToken.for_user(user)
-    
+
     # Add impersonation claim to identify this as an impersonated session
     refresh['is_impersonated'] = True
     refresh['impersonated_by'] = str(request.user.id)
-    
+    refresh['impersonated_by_email'] = request.user.email
+
+    # Set shorter expiry for impersonation tokens (15 minutes)
+    IMPERSONATION_EXPIRY_MINUTES = 15
+    refresh.access_token.set_exp(lifetime=timedelta(minutes=IMPERSONATION_EXPIRY_MINUTES))
+
     # Log the impersonation
     AdminAuditLog.log(
         admin=request.user,
@@ -977,17 +1060,29 @@ def impersonate_user(request, user_id):
         target_type='user',
         target_id=str(user.id),
         target_label=user.email,
-        request=request
+        request=request,
+        details={
+            'reason': request.data.get('reason', 'Not provided'),
+            'expiry_minutes': IMPERSONATION_EXPIRY_MINUTES
+        }
     )
-    
-    logger.warning(f"Admin {request.user.email} impersonating user {user.email}")
-    
+
+    logger.warning(
+        f"Admin {request.user.email} impersonating user {user.email}",
+        extra={
+            'admin_id': str(request.user.id),
+            'target_id': str(user.id),
+            'reason': request.data.get('reason', 'Not provided')
+        }
+    )
+
     return Response({
         'access': str(refresh.access_token),
         'refresh': str(refresh),
         'user_email': user.email,
         'user_id': str(user.id),
-        'expires_in': 3600  # 1 hour
+        'expires_in': IMPERSONATION_EXPIRY_MINUTES * 60,  # 15 minutes in seconds
+        'warning': 'This is a time-limited impersonation session. Use responsibly.'
     })
 
 
@@ -996,33 +1091,217 @@ def impersonate_user(request, user_id):
 # =====================
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
 def system_health(request):
     """Get comprehensive system health status"""
     from apps.admin_api.services import SystemHealthService
-    
+
     health_data = SystemHealthService.get_full_health_status()
     return Response(health_data)
 
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
 def system_queues(request):
     """Get job queue status"""
     from apps.admin_api.services import SystemHealthService
-    
+
     queue_data = SystemHealthService.get_queue_status()
     return Response(queue_data)
 
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
 def system_metrics(request):
     """Get system usage metrics"""
     from apps.admin_api.services import SystemMetricsService
 
     metrics = SystemMetricsService.get_usage_metrics()
     return Response(metrics)
+
+
+# =====================
+# Maintenance Mode Endpoints
+# =====================
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+def get_maintenance_mode(request):
+    """Get current maintenance mode status"""
+    from django.core.cache import cache
+    
+    maintenance_data = cache.get('maintenance_mode', {
+        'enabled': False,
+        'message': '',
+        'estimated_end': None,
+        'allowed_ips': []
+    })
+    
+    return Response(maintenance_data)
+
+
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
+def set_maintenance_mode(request):
+    """
+    Enable or disable maintenance mode.
+    
+    Request body:
+        - enabled: bool (required)
+        - message: str (optional, displayed to users)
+        - estimated_end: datetime (optional)
+        - allowed_ips: list of IPs that can bypass maintenance (optional)
+    """
+    from django.core.cache import cache
+    
+    enabled = request.data.get('enabled', False)
+    message = request.data.get('message', 'We are currently performing scheduled maintenance. Please check back soon.')
+    estimated_end = request.data.get('estimated_end')
+    allowed_ips = request.data.get('allowed_ips', [])
+    
+    maintenance_data = {
+        'enabled': enabled,
+        'message': message,
+        'estimated_end': estimated_end,
+        'allowed_ips': allowed_ips,
+        'updated_at': timezone.now().isoformat(),
+        'updated_by': request.user.email
+    }
+    
+    # Store in cache (persists across restarts if using Redis)
+    cache.set('maintenance_mode', maintenance_data, timeout=None)  # No expiry
+    
+    # Log the action
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.maintenance_mode',
+        target_type='system',
+        target_id='',
+        target_label='Maintenance Mode',
+        request=request,
+        details={
+            'enabled': enabled,
+            'message': message,
+            'estimated_end': estimated_end
+        }
+    )
+    
+    action_str = 'enabled' if enabled else 'disabled'
+    logger.info(f"Maintenance mode {action_str} by {request.user.email}")
+    
+    return Response({
+        'status': 'success',
+        'maintenance_mode': maintenance_data,
+        'message': f'Maintenance mode {action_str}'
+    })
+
+
+# =====================
+# Error Log Viewer Endpoints
+# =====================
+
+@api_view(['GET'])
+@permission_classes([IsSuperAdmin, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def admin_error_logs(request):
+    """
+    View application error logs.
+    
+    GET /v1/admin/logs/errors/
+    
+    Query params:
+        - level: Filter by log level (ERROR, WARNING, INFO)
+        - search: Search in log messages
+        - limit: Number of logs to return (default 100, max 500)
+        - offset: Pagination offset
+    """
+    import os
+    import re
+    from pathlib import Path
+    
+    log_level = request.query_params.get('level', 'ERROR').upper()
+    search_query = request.query_params.get('search', '').lower()
+    limit = min(int(request.query_params.get('limit', 100)), 500)
+    offset = int(request.query_params.get('offset', 0))
+    
+    # Get log file path from settings or use default
+    log_file = getattr(settings, 'LOG_FILE_PATH', None)
+    if not log_file:
+        log_file = Path(settings.BASE_DIR) / 'logs' / 'django.log'
+    
+    logs = []
+    
+    try:
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                # Read last N lines efficiently (tail-like behavior)
+                lines = f.readlines()[-5000:]  # Last 5000 lines max
+                
+                # Parse log entries
+                log_pattern = re.compile(
+                    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+'  # timestamp
+                    r'(\w+)\s+'  # log level
+                    r'(\S+)\s+'  # logger name
+                    r'(.*)$',  # message
+                    re.MULTILINE
+                )
+                
+                current_entry = None
+                for line in lines:
+                    match = log_pattern.match(line.strip())
+                    if match:
+                        # New log entry
+                        if current_entry:
+                            # Check filters before adding
+                            if (log_level == 'ALL' or current_entry['level'] == log_level):
+                                if not search_query or search_query in current_entry['message'].lower():
+                                    logs.append(current_entry)
+                        
+                        current_entry = {
+                            'timestamp': match.group(1),
+                            'level': match.group(2),
+                            'logger': match.group(3),
+                            'message': match.group(4)
+                        }
+                    elif current_entry:
+                        # Continuation of previous entry (multiline)
+                        current_entry['message'] += '\n' + line.strip()
+                
+                # Don't forget the last entry
+                if current_entry:
+                    if (log_level == 'ALL' or current_entry['level'] == log_level):
+                        if not search_query or search_query in current_entry['message'].lower():
+                            logs.append(current_entry)
+        
+        # Reverse to show newest first
+        logs = logs[::-1]
+        
+        # Apply pagination
+        total = len(logs)
+        logs = logs[offset:offset + limit]
+        
+        return Response({
+            'logs': logs,
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'log_file': str(log_file) if os.path.exists(log_file) else None,
+            'file_exists': os.path.exists(log_file)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error reading log file: {e}")
+        return Response({
+            'logs': [],
+            'total': 0,
+            'error': str(e),
+            'log_file': str(log_file),
+            'file_exists': os.path.exists(log_file) if log_file else False
+        })
 
 
 # =====================
@@ -2407,3 +2686,1528 @@ def admin_geo_analytics(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+# =====================
+# Two-Factor Authentication (2FA) Endpoints
+# =====================
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def twofa_status(request):
+    """
+    GET /v1/admin/auth/2fa/status/
+
+    Get current 2FA status for the authenticated admin.
+    """
+    from apps.admin_api.models import Admin2FA
+
+    try:
+        twofa = Admin2FA.objects.get(user=request.user)
+        return Response({
+            'is_enabled': twofa.is_enabled,
+            'enabled_at': twofa.enabled_at,
+            'last_used_at': twofa.last_used_at,
+            'backup_codes_remaining': len(twofa.backup_codes) if twofa.backup_codes else 0
+        })
+    except Admin2FA.DoesNotExist:
+        return Response({
+            'is_enabled': False,
+            'enabled_at': None,
+            'last_used_at': None,
+            'backup_codes_remaining': 0
+        })
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
+def twofa_setup(request):
+    """
+    POST /v1/admin/auth/2fa/setup/
+
+    Initialize 2FA setup - generates secret and QR code.
+    Returns the secret and QR code for the authenticator app.
+    """
+    from apps.admin_api.models import Admin2FA
+    import qrcode
+    import qrcode.image.svg
+    from io import BytesIO
+    import base64
+
+    twofa = Admin2FA.get_or_create_for_user(request.user)
+
+    # Generate new secret
+    secret = twofa.generate_secret()
+    twofa.is_verified = False
+    twofa.save()
+
+    # Get provisioning URI
+    uri = twofa.get_totp_uri(issuer="Webbotify Admin")
+
+    # Generate QR code as base64 PNG
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buffer = BytesIO()
+    img.save(buffer, format='PNG')
+    qr_base64 = base64.b64encode(buffer.getvalue()).decode()
+
+    logger.info(f"Admin {request.user.email} initiated 2FA setup")
+
+    return Response({
+        'secret': secret,
+        'qr_code': f"data:image/png;base64,{qr_base64}",
+        'provisioning_uri': uri,
+        'message': 'Scan the QR code with your authenticator app, then verify with a code.'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminLoginThrottle])  # Use login throttle for verification
+def twofa_verify(request):
+    """
+    POST /v1/admin/auth/2fa/verify/
+
+    Verify TOTP code and enable 2FA.
+
+    Request body:
+        - code: 6-digit TOTP code from authenticator app
+    """
+    from apps.admin_api.models import Admin2FA
+    from apps.admin_api.serializers import TwoFactorVerifySerializer
+
+    serializer = TwoFactorVerifySerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    code = serializer.validated_data['code']
+
+    try:
+        twofa = Admin2FA.objects.get(user=request.user)
+    except Admin2FA.DoesNotExist:
+        return Response(
+            {'error': '2FA setup not initiated. Call /2fa/setup/ first.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if not twofa.secret:
+        return Response(
+            {'error': '2FA setup not initiated. Call /2fa/setup/ first.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Verify the code
+    if not twofa.verify_code(code):
+        logger.warning(f"Invalid 2FA code during setup for {request.user.email}")
+        return Response(
+            {'error': 'Invalid verification code. Please try again.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Generate backup codes
+    backup_codes = twofa.generate_backup_codes(count=10)
+
+    # Enable 2FA
+    twofa.enable()
+
+    # Log the action
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='user',
+        target_id=str(request.user.id),
+        target_label=request.user.email,
+        details={'action': '2fa_enabled'},
+        request=request
+    )
+
+    logger.info(f"Admin {request.user.email} enabled 2FA")
+
+    return Response({
+        'message': '2FA has been enabled successfully.',
+        'backup_codes': backup_codes,
+        'warning': 'Save these backup codes securely. They will only be shown once.'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
+def twofa_disable(request):
+    """
+    POST /v1/admin/auth/2fa/disable/
+
+    Disable 2FA for the admin account.
+
+    Request body:
+        - code: Current TOTP code or backup code
+        - password: Current password for confirmation
+    """
+    from apps.admin_api.models import Admin2FA
+    from apps.admin_api.serializers import TwoFactorDisableSerializer
+
+    serializer = TwoFactorDisableSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    code = serializer.validated_data['code']
+    password = serializer.validated_data['password']
+
+    # Verify password
+    if not request.user.check_password(password):
+        return Response(
+            {'error': 'Invalid password.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        twofa = Admin2FA.objects.get(user=request.user)
+    except Admin2FA.DoesNotExist:
+        return Response(
+            {'error': '2FA is not enabled.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if not twofa.is_enabled:
+        return Response(
+            {'error': '2FA is not enabled.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Verify code (TOTP or backup)
+    code_valid = twofa.verify_code(code) or twofa.verify_backup_code(code)
+    if not code_valid:
+        logger.warning(f"Invalid code during 2FA disable for {request.user.email}")
+        return Response(
+            {'error': 'Invalid verification code.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Disable 2FA
+    twofa.disable()
+
+    # Log the action
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='user',
+        target_id=str(request.user.id),
+        target_label=request.user.email,
+        details={'action': '2fa_disabled'},
+        request=request
+    )
+
+    logger.info(f"Admin {request.user.email} disabled 2FA")
+
+    return Response({
+        'message': '2FA has been disabled.'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
+def twofa_regenerate_backup_codes(request):
+    """
+    POST /v1/admin/auth/2fa/backup-codes/
+
+    Regenerate backup codes (requires current TOTP code).
+
+    Request body:
+        - code: Current TOTP code for verification
+    """
+    from apps.admin_api.models import Admin2FA
+    from apps.admin_api.serializers import TwoFactorVerifySerializer
+
+    serializer = TwoFactorVerifySerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    code = serializer.validated_data['code']
+
+    try:
+        twofa = Admin2FA.objects.get(user=request.user)
+    except Admin2FA.DoesNotExist:
+        return Response(
+            {'error': '2FA is not enabled.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if not twofa.is_enabled:
+        return Response(
+            {'error': '2FA is not enabled.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Verify TOTP code
+    if not twofa.verify_code(code):
+        return Response(
+            {'error': 'Invalid verification code.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Generate new backup codes
+    backup_codes = twofa.generate_backup_codes(count=10)
+    twofa.save()
+
+    # Log the action
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='user',
+        target_id=str(request.user.id),
+        target_label=request.user.email,
+        details={'action': '2fa_backup_codes_regenerated'},
+        request=request
+    )
+
+    logger.info(f"Admin {request.user.email} regenerated 2FA backup codes")
+
+    return Response({
+        'backup_codes': backup_codes,
+        'message': 'New backup codes generated. Save them securely.',
+        'warning': 'Previous backup codes are now invalid.'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([AdminLoginThrottle, AdminLoginDailyThrottle])
+def twofa_login_verify(request):
+    """
+    POST /v1/admin/auth/2fa/login/
+
+    Verify 2FA code during admin login.
+
+    This endpoint is called after initial credentials are verified
+    when the user has 2FA enabled.
+
+    Request body:
+        - temp_token: Temporary token from initial login
+        - code: 6-digit TOTP code or backup code
+    """
+    from apps.admin_api.models import Admin2FA
+    from apps.admin_api.serializers import TwoFactorLoginSerializer, AdminUserSerializer
+    from django.core.cache import cache
+
+    serializer = TwoFactorLoginSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    temp_token = serializer.validated_data['temp_token']
+    code = serializer.validated_data['code']
+
+    # Retrieve user ID from temp token
+    cache_key = f'admin_2fa_pending_{temp_token}'
+    user_data = cache.get(cache_key)
+
+    if not user_data:
+        return Response(
+            {'error': 'Invalid or expired token. Please login again.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        user = User.objects.get(id=user_data['user_id'])
+    except User.DoesNotExist:
+        return Response(
+            {'error': 'User not found.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        twofa = Admin2FA.objects.get(user=user)
+    except Admin2FA.DoesNotExist:
+        return Response(
+            {'error': '2FA is not configured.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Verify code (TOTP or backup)
+    code_valid = False
+    is_backup_code = False
+
+    if len(code) == 6 and code.isdigit():
+        code_valid = twofa.verify_code(code)
+    else:
+        # Try as backup code
+        code_valid = twofa.verify_backup_code(code)
+        is_backup_code = True
+
+    if not code_valid:
+        logger.warning(f"Invalid 2FA code during login for {user.email}")
+        return Response(
+            {'error': 'Invalid verification code.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Record 2FA use
+    twofa.record_use()
+
+    # Clear the temp token
+    cache.delete(cache_key)
+
+    # Generate final tokens
+    refresh = RefreshToken.for_user(user)
+    access_token = refresh.access_token
+
+    # Add admin claims
+    access_token['is_admin'] = True
+    access_token['is_superuser'] = user.is_superuser
+    access_token['is_staff'] = user.is_staff
+
+    # Get client info for logging
+    client_ip = get_client_ip(request)
+    user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+
+    # Record successful login
+    LoginHistory.objects.create(
+        user=user,
+        success=True,
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+
+    # Log the admin login
+    AdminAuditLog.objects.create(
+        admin=user,
+        admin_email=user.email,
+        action='system.config_change',
+        target_type='user',
+        target_id=str(user.id),
+        target_label=user.email,
+        ip_address=client_ip,
+        user_agent=user_agent,
+        details={
+            'login_method': 'admin_portal',
+            'action': 'admin_login_2fa',
+            'used_backup_code': is_backup_code
+        }
+    )
+
+    # Update last login
+    user.last_login = timezone.now()
+    user.save(update_fields=['last_login'])
+
+    logger.info(f"Admin 2FA login successful for {user.email}")
+
+    response_data = {
+        'user': AdminUserSerializer(user).data,
+        'tokens': {
+            'access': str(access_token),
+            'refresh': str(refresh),
+        },
+        'is_admin': True
+    }
+
+    if is_backup_code:
+        response_data['warning'] = f'You used a backup code. {len(twofa.backup_codes)} codes remaining.'
+
+    return Response(response_data)
+
+
+# =====================
+# Alerting System Endpoints
+# =====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def alert_rules_list(request):
+    """
+    GET /v1/admin/alerts/rules/
+    List all alert rules.
+
+    POST /v1/admin/alerts/rules/
+    Create a new alert rule.
+    """
+    from apps.admin_api.models import AlertRule
+    from apps.admin_api.serializers import AlertRuleSerializer, AlertRuleCreateSerializer
+
+    if request.method == 'GET':
+        rules = AlertRule.objects.select_related('created_by').order_by('-created_at')
+
+        # Filters
+        alert_type = request.query_params.get('alert_type')
+        if alert_type:
+            rules = rules.filter(alert_type=alert_type)
+
+        is_enabled = request.query_params.get('is_enabled')
+        if is_enabled is not None:
+            rules = rules.filter(is_enabled=is_enabled.lower() == 'true')
+
+        severity = request.query_params.get('severity')
+        if severity:
+            rules = rules.filter(severity=severity)
+
+        # Pagination
+        limit = min(int(request.query_params.get('limit', 50)), 100)
+        offset = int(request.query_params.get('offset', 0))
+        total = rules.count()
+        rules = rules[offset:offset + limit]
+
+        serializer = AlertRuleSerializer(rules, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total,
+            'limit': limit,
+            'offset': offset
+        })
+
+    elif request.method == 'POST':
+        serializer = AlertRuleCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        rule = serializer.save(created_by=request.user)
+
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='alert_rule',
+            target_id=str(rule.id),
+            target_label=rule.name,
+            details={'action': 'created', 'alert_type': rule.alert_type},
+            request=request
+        )
+
+        logger.info(f"Admin {request.user.email} created alert rule {rule.id}: {rule.name}")
+        return Response(AlertRuleSerializer(rule).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def alert_rule_detail(request, rule_id):
+    """
+    GET /v1/admin/alerts/rules/<rule_id>/
+    Get alert rule details.
+
+    PATCH /v1/admin/alerts/rules/<rule_id>/
+    Update an alert rule.
+
+    DELETE /v1/admin/alerts/rules/<rule_id>/
+    Delete an alert rule.
+    """
+    from apps.admin_api.models import AlertRule
+    from apps.admin_api.serializers import AlertRuleSerializer, AlertRuleCreateSerializer
+
+    try:
+        rule = AlertRule.objects.select_related('created_by').get(id=rule_id)
+    except AlertRule.DoesNotExist:
+        return Response({'error': 'Alert rule not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = AlertRuleSerializer(rule)
+        return Response(serializer.data)
+
+    elif request.method == 'PATCH':
+        serializer = AlertRuleCreateSerializer(rule, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        rule = serializer.save()
+
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='alert_rule',
+            target_id=str(rule.id),
+            target_label=rule.name,
+            details={'action': 'updated', 'changes': request.data},
+            request=request
+        )
+
+        return Response(AlertRuleSerializer(rule).data)
+
+    elif request.method == 'DELETE':
+        rule_name = rule.name
+        rule_id_str = str(rule.id)
+        rule.delete()
+
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='alert_rule',
+            target_id=rule_id_str,
+            target_label=rule_name,
+            details={'action': 'deleted'},
+            request=request
+        )
+
+        return Response({'status': 'deleted'}, status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def alert_rule_test(request, rule_id):
+    """
+    POST /v1/admin/alerts/rules/<rule_id>/test/
+
+    Test an alert rule by evaluating it immediately.
+    """
+    from apps.admin_api.models import AlertRule
+    from apps.admin_api.services import AlertService
+
+    try:
+        rule = AlertRule.objects.get(id=rule_id)
+    except AlertRule.DoesNotExist:
+        return Response({'error': 'Alert rule not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Evaluate the rule
+    result = AlertService.evaluate_rule(rule)
+
+    return Response({
+        'rule_name': rule.name,
+        'alert_type': rule.alert_type,
+        'triggered': result.get('triggered', False),
+        'details': result.get('details', {}),
+        'message': 'Rule evaluation complete. No notification sent during test.'
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def alert_notifications_list(request):
+    """
+    GET /v1/admin/alerts/notifications/
+
+    List alert notifications history.
+    """
+    from apps.admin_api.models import AlertNotification
+    from apps.admin_api.serializers import AlertNotificationSerializer
+
+    notifications = AlertNotification.objects.select_related('rule').order_by('-sent_at')
+
+    # Filters
+    rule_id = request.query_params.get('rule_id')
+    if rule_id:
+        notifications = notifications.filter(rule_id=rule_id)
+
+    severity = request.query_params.get('severity')
+    if severity:
+        notifications = notifications.filter(severity=severity)
+
+    delivered = request.query_params.get('delivered')
+    if delivered is not None:
+        notifications = notifications.filter(delivered=delivered.lower() == 'true')
+
+    # Date range
+    start_date = request.query_params.get('start_date')
+    if start_date:
+        notifications = notifications.filter(sent_at__date__gte=start_date)
+
+    end_date = request.query_params.get('end_date')
+    if end_date:
+        notifications = notifications.filter(sent_at__date__lte=end_date)
+
+    # Pagination
+    limit = min(int(request.query_params.get('limit', 50)), 100)
+    offset = int(request.query_params.get('offset', 0))
+    total = notifications.count()
+    notifications = notifications[offset:offset + limit]
+
+    serializer = AlertNotificationSerializer(notifications, many=True)
+    return Response({
+        'results': serializer.data,
+        'count': total,
+        'limit': limit,
+        'offset': offset
+    })
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def system_alerts_list(request):
+    """
+    GET /v1/admin/alerts/system/
+    List active system alerts for dashboard.
+
+    POST /v1/admin/alerts/system/
+    Create a manual system alert.
+    """
+    from apps.admin_api.models import SystemAlert
+    from apps.admin_api.serializers import SystemAlertSerializer, SystemAlertCreateSerializer
+
+    if request.method == 'GET':
+        # By default, show active alerts
+        show_all = request.query_params.get('all', 'false').lower() == 'true'
+
+        if show_all:
+            alerts = SystemAlert.objects.all()
+        else:
+            alerts = SystemAlert.get_active_alerts()
+
+        # Filters
+        level = request.query_params.get('level')
+        if level:
+            alerts = alerts.filter(level=level)
+
+        acknowledged = request.query_params.get('acknowledged')
+        if acknowledged is not None:
+            alerts = alerts.filter(is_acknowledged=acknowledged.lower() == 'true')
+
+        # Pagination
+        limit = min(int(request.query_params.get('limit', 50)), 100)
+        offset = int(request.query_params.get('offset', 0))
+        total = alerts.count()
+        alerts = alerts[offset:offset + limit]
+
+        serializer = SystemAlertSerializer(alerts, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total,
+            'limit': limit,
+            'offset': offset
+        })
+
+    elif request.method == 'POST':
+        serializer = SystemAlertCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        from apps.admin_api.services import AlertService
+        alert = AlertService.create_manual_alert(
+            title=serializer.validated_data['title'],
+            message=serializer.validated_data['message'],
+            level=serializer.validated_data.get('level', 'warning'),
+            related_type=serializer.validated_data.get('related_type', ''),
+            related_id=serializer.validated_data.get('related_id', ''),
+            expires_hours=serializer.validated_data.get('expires_hours', 24)
+        )
+
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='system_alert',
+            target_id=str(alert.id),
+            target_label=alert.title,
+            details={'action': 'created', 'level': alert.level},
+            request=request
+        )
+
+        logger.info(f"Admin {request.user.email} created system alert: {alert.title}")
+        return Response(SystemAlertSerializer(alert).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'DELETE'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def system_alert_detail(request, alert_id):
+    """
+    GET /v1/admin/alerts/system/<alert_id>/
+    Get system alert details.
+
+    DELETE /v1/admin/alerts/system/<alert_id>/
+    Delete a system alert.
+    """
+    from apps.admin_api.models import SystemAlert
+    from apps.admin_api.serializers import SystemAlertSerializer
+
+    try:
+        alert = SystemAlert.objects.get(id=alert_id)
+    except SystemAlert.DoesNotExist:
+        return Response({'error': 'Alert not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(SystemAlertSerializer(alert).data)
+
+    elif request.method == 'DELETE':
+        alert_title = alert.title
+        alert_id_str = str(alert.id)
+        alert.delete()
+
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='system_alert',
+            target_id=alert_id_str,
+            target_label=alert_title,
+            details={'action': 'deleted'},
+            request=request
+        )
+
+        return Response({'status': 'deleted'}, status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def system_alert_acknowledge(request, alert_id):
+    """
+    POST /v1/admin/alerts/system/<alert_id>/acknowledge/
+
+    Acknowledge a system alert.
+    """
+    from apps.admin_api.models import SystemAlert
+    from apps.admin_api.serializers import SystemAlertSerializer
+
+    try:
+        alert = SystemAlert.objects.get(id=alert_id)
+    except SystemAlert.DoesNotExist:
+        return Response({'error': 'Alert not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if alert.is_acknowledged:
+        return Response({
+            'message': 'Alert already acknowledged',
+            'acknowledged_by': alert.acknowledged_by.email if alert.acknowledged_by else None,
+            'acknowledged_at': alert.acknowledged_at
+        })
+
+    alert.acknowledge(request.user)
+
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='system_alert',
+        target_id=str(alert.id),
+        target_label=alert.title,
+        details={'action': 'acknowledged'},
+        request=request
+    )
+
+    return Response(SystemAlertSerializer(alert).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def system_alert_resolve(request, alert_id):
+    """
+    POST /v1/admin/alerts/system/<alert_id>/resolve/
+
+    Resolve a system alert.
+    """
+    from apps.admin_api.models import SystemAlert
+    from apps.admin_api.serializers import SystemAlertSerializer
+
+    try:
+        alert = SystemAlert.objects.get(id=alert_id)
+    except SystemAlert.DoesNotExist:
+        return Response({'error': 'Alert not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not alert.is_active:
+        return Response({
+            'message': 'Alert already resolved',
+            'resolved_at': alert.resolved_at
+        })
+
+    alert.resolve()
+
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='system_alert',
+        target_id=str(alert.id),
+        target_label=alert.title,
+        details={'action': 'resolved'},
+        request=request
+    )
+
+    return Response(SystemAlertSerializer(alert).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def alert_stats(request):
+    """
+    GET /v1/admin/alerts/stats/
+
+    Get alert statistics for dashboard.
+    """
+    from apps.admin_api.models import AlertRule, SystemAlert, AlertNotification
+    from django.db.models import Count
+
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = now - timedelta(days=7)
+
+    # System alert stats
+    active_alerts = SystemAlert.objects.filter(is_active=True)
+    active_count = active_alerts.count()
+    critical_count = active_alerts.filter(level='critical').count()
+    warning_count = active_alerts.filter(level__in=['warning', 'error']).count()
+
+    # Notification stats
+    alerts_today = AlertNotification.objects.filter(sent_at__gte=today_start).count()
+    alerts_this_week = AlertNotification.objects.filter(sent_at__gte=week_ago).count()
+
+    # Rule stats
+    total_rules = AlertRule.objects.count()
+    enabled_rules = AlertRule.objects.filter(is_enabled=True).count()
+
+    # By type breakdown
+    alerts_by_type = dict(
+        AlertNotification.objects.filter(sent_at__gte=week_ago)
+        .values('rule__alert_type')
+        .annotate(count=Count('id'))
+        .values_list('rule__alert_type', 'count')
+    )
+
+    # By severity breakdown
+    alerts_by_severity = dict(
+        AlertNotification.objects.filter(sent_at__gte=week_ago)
+        .values('severity')
+        .annotate(count=Count('id'))
+        .values_list('severity', 'count')
+    )
+
+    return Response({
+        'active_alerts': active_count,
+        'critical_alerts': critical_count,
+        'warning_alerts': warning_count,
+        'alerts_today': alerts_today,
+        'alerts_this_week': alerts_this_week,
+        'enabled_rules': enabled_rules,
+        'total_rules': total_rules,
+        'by_type': alerts_by_type,
+        'by_severity': alerts_by_severity
+    })
+
+
+# =====================
+# Global Search Endpoint
+# =====================
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def admin_global_search(request):
+    """
+    Global search across all admin entities.
+    
+    GET /v1/admin/search/?q=<query>&type=<optional_type>
+    
+    Searches across:
+    - Users (email, name)
+    - Organizations (name, slug)
+    - Chatbots (name)
+    - Sites (domain, name)
+    - Jobs (site domain)
+    
+    Query params:
+        - q: Search query (required, min 2 characters)
+        - type: Filter by type (users, organizations, chatbots, sites, jobs)
+        - limit: Max results per category (default 5, max 20)
+    """
+    query = request.query_params.get('q', '').strip()
+    search_type = request.query_params.get('type', 'all')
+    limit = min(int(request.query_params.get('limit', 5)), 20)
+    
+    if len(query) < 2:
+        return Response({
+            'error': 'Search query must be at least 2 characters'
+        }, status=400)
+    
+    results = {}
+    
+    # Search Users
+    if search_type in ['all', 'users']:
+        users = User.objects.filter(
+            Q(email__icontains=query) |
+            Q(name__icontains=query)
+        ).order_by('-created_at')[:limit]
+        results['users'] = [
+            {
+                'id': str(u.id),
+                'type': 'user',
+                'title': u.email,
+                'subtitle': u.name or 'No name',
+                'status': u.status,
+                'url': f'/admin/users/{u.id}'
+            }
+            for u in users
+        ]
+    
+    # Search Organizations
+    if search_type in ['all', 'organizations']:
+        orgs = Organization.objects.filter(
+            Q(name__icontains=query) |
+            Q(slug__icontains=query)
+        ).order_by('-created_at')[:limit]
+        results['organizations'] = [
+            {
+                'id': str(o.id),
+                'type': 'organization',
+                'title': o.name,
+                'subtitle': o.slug,
+                'status': o.status,
+                'url': f'/admin/organizations/{o.id}'
+            }
+            for o in orgs
+        ]
+    
+    # Search Chatbots
+    if search_type in ['all', 'chatbots']:
+        chatbots = Chatbot.objects.filter(
+            Q(name__icontains=query)
+        ).select_related().order_by('-created_at')[:limit]
+        results['chatbots'] = [
+            {
+                'id': str(c.id),
+                'type': 'chatbot',
+                'title': c.name,
+                'subtitle': f'Site: {c.site_id}',
+                'status': c.status,
+                'url': f'/admin/chatbots'
+            }
+            for c in chatbots
+        ]
+    
+    # Search Sites
+    if search_type in ['all', 'sites']:
+        sites = Site.objects.filter(
+            Q(domain__icontains=query) |
+            Q(name__icontains=query)
+        ).order_by('-created_at')[:limit]
+        results['sites'] = [
+            {
+                'id': str(s.id),
+                'type': 'site',
+                'title': s.domain,
+                'subtitle': s.name or '',
+                'status': s.status,
+                'url': f'/admin/sites'
+            }
+            for s in sites
+        ]
+    
+    # Search Jobs (by site domain or ID)
+    if search_type in ['all', 'jobs']:
+        # Get site IDs matching the query
+        matching_site_ids = Site.objects.filter(
+            Q(domain__icontains=query)
+        ).values_list('id', flat=True)[:20]
+        
+        jobs = IndexingJob.objects.filter(
+            Q(site_id__in=matching_site_ids) |
+            Q(url__icontains=query)
+        ).order_by('-created_at')[:limit]
+        
+        results['jobs'] = [
+            {
+                'id': str(j.id),
+                'type': 'job',
+                'title': j.url or f'Job {str(j.id)[:8]}',
+                'subtitle': f'Status: {j.status}',
+                'status': j.status,
+                'url': f'/admin/jobs'
+            }
+            for j in jobs
+        ]
+    
+    # Calculate total count
+    total_count = sum(len(v) for v in results.values())
+    
+    return Response({
+        'query': query,
+        'total_count': total_count,
+        'results': results
+    })
+
+
+# =====================
+# Announcement Endpoints
+# =====================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def announcements_list(request):
+    """
+    List all announcements or create a new one.
+    
+    GET /v1/admin/announcements/
+    POST /v1/admin/announcements/
+    """
+    from apps.admin_api.models import Announcement
+    from apps.admin_api.serializers import AnnouncementListSerializer, AnnouncementCreateSerializer
+    
+    if request.method == 'GET':
+        # Get all announcements
+        announcements = Announcement.objects.all().order_by('-created_at')
+        
+        # Filter by status
+        status_filter = request.query_params.get('status')
+        if status_filter == 'active':
+            announcements = announcements.filter(is_active=True)
+        elif status_filter == 'inactive':
+            announcements = announcements.filter(is_active=False)
+        
+        # Pagination
+        limit = min(int(request.query_params.get('limit', 50)), 100)
+        offset = int(request.query_params.get('offset', 0))
+        total = announcements.count()
+        announcements = announcements[offset:offset + limit]
+        
+        serializer = AnnouncementListSerializer(announcements, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total,
+            'limit': limit,
+            'offset': offset
+        })
+    
+    elif request.method == 'POST':
+        serializer = AnnouncementCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Create announcement
+        announcement = Announcement.objects.create(
+            created_by=request.user,
+            **serializer.validated_data
+        )
+        
+        # Log the action
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='announcement',
+            target_id=str(announcement.id),
+            target_label=announcement.title,
+            request=request,
+            details={'action': 'created'}
+        )
+        
+        from apps.admin_api.serializers import AnnouncementDetailSerializer
+        return Response(AnnouncementDetailSerializer(announcement).data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+@throttle_classes([AdminRateThrottle])
+def announcement_detail(request, announcement_id):
+    """
+    Get, update, or delete an announcement.
+    
+    GET/PUT/DELETE /v1/admin/announcements/<announcement_id>/
+    """
+    from apps.admin_api.models import Announcement
+    from apps.admin_api.serializers import AnnouncementDetailSerializer, AnnouncementCreateSerializer
+    
+    announcement = get_object_or_404(Announcement, id=announcement_id)
+    
+    if request.method == 'GET':
+        serializer = AnnouncementDetailSerializer(announcement)
+        return Response(serializer.data)
+    
+    elif request.method == 'PUT':
+        serializer = AnnouncementCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Update fields
+        for key, value in serializer.validated_data.items():
+            setattr(announcement, key, value)
+        announcement.save()
+        
+        # Log the action
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='announcement',
+            target_id=str(announcement.id),
+            target_label=announcement.title,
+            request=request,
+            details={'action': 'updated'}
+        )
+        
+        return Response(AnnouncementDetailSerializer(announcement).data)
+    
+    elif request.method == 'DELETE':
+        title = announcement.title
+        announcement_id_str = str(announcement.id)
+        announcement.delete()
+        
+        # Log the action
+        AdminAuditLog.log(
+            admin=request.user,
+            action='system.config_change',
+            target_type='announcement',
+            target_id=announcement_id_str,
+            target_label=title,
+            request=request,
+            details={'action': 'deleted'}
+        )
+        
+        return Response({'status': 'deleted'}, status=204)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_active_announcements(request):
+    """
+    Get active announcements for the current user.
+    Public endpoint - no auth required.
+    
+    GET /v1/announcements/active/
+    """
+    from apps.admin_api.models import Announcement
+    
+    tier = request.query_params.get('tier', 'basic')
+    announcements = Announcement.get_active_announcements(tier=tier)
+    
+    # Return simplified data for frontend
+    data = [
+        {
+            'id': str(a.id),
+            'title': a.title,
+            'message': a.message,
+            'type': a.announcement_type,
+            'style': a.style,
+            'link_url': a.link_url,
+            'link_text': a.link_text,
+            'is_dismissible': a.is_dismissible,
+        }
+        for a in announcements[:5]  # Max 5 active announcements
+    ]
+    
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def dismiss_announcement(request, announcement_id):
+    """
+    Record that a user dismissed an announcement.
+    
+    POST /v1/announcements/<announcement_id>/dismiss/
+    """
+    from apps.admin_api.models import Announcement
+    
+    try:
+        announcement = Announcement.objects.get(id=announcement_id)
+        announcement.record_dismiss()
+        return Response({'status': 'dismissed'})
+    except Announcement.DoesNotExist:
+        return Response({'error': 'Announcement not found'}, status=404)
+
+
+# ==============================================================================
+# FEATURE FLAGS VIEWS (PHASE 2)
+# ==============================================================================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, IsAdminUser])
+def feature_flag_list(request):
+    """
+    List and create feature flags.
+    
+    GET: List all feature flags
+    POST: Create a new feature flag
+    """
+    from apps.admin_api.models import FeatureFlag, AdminAuditLog
+    from apps.admin_api.serializers import FeatureFlagSerializer
+
+    if request.method == 'GET':
+        feature_flags = FeatureFlag.objects.all().order_by('-created_at')
+        serializer = FeatureFlagSerializer(feature_flags, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        serializer = FeatureFlagSerializer(data=request.data)
+        if serializer.is_valid():
+            flag = serializer.save(created_by=request.user)
+            
+            # Log action
+            AdminAuditLog.log_action(
+                user=request.user,
+                action="create_feature_flag",
+                target_model="FeatureFlag",
+                target_id=str(flag.id),
+                details=f"Created feature flag: {flag.key}"
+            )
+            
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated, IsAdminUser])
+def feature_flag_detail(request, pk):
+    """
+    Retrieve, update or delete a feature flag.
+    """
+    from apps.admin_api.models import FeatureFlag, AdminAuditLog
+    from apps.admin_api.serializers import FeatureFlagSerializer
+
+    try:
+        flag = FeatureFlag.objects.get(pk=pk)
+    except FeatureFlag.DoesNotExist:
+        return Response({'error': 'Feature flag not found'}, status=404)
+
+    if request.method == 'GET':
+        serializer = FeatureFlagSerializer(flag)
+        return Response(serializer.data)
+
+    elif request.method == 'PUT':
+        serializer = FeatureFlagSerializer(flag, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            
+            # Log action
+            AdminAuditLog.log_action(
+                user=request.user,
+                action="update_feature_flag",
+                target_model="FeatureFlag",
+                target_id=str(flag.id),
+                details=f"Updated feature flag: {flag.key}"
+            )
+            
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+    elif request.method == 'DELETE':
+        feature_key = flag.key
+        flag.delete()
+        
+        # Log action
+        AdminAuditLog.log_action(
+            user=request.user,
+            action="delete_feature_flag",
+            target_model="FeatureFlag",
+            target_id=str(pk),
+            details=f"Deleted feature flag: {feature_key}"
+        )
+        
+        return Response(status=204)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def check_feature_flag(request):
+    """
+    Check if a feature flag is enabled for the current context.
+    
+    Query params:
+    - key: The feature flag key (required)
+    - distinct_id: Unique identifier for the user (optional, defaults to authenticated user ID or anon)
+    """
+    from apps.admin_api.models import FeatureFlag
+    
+    key = request.query_params.get('key')
+    if not key:
+        return Response({'error': 'Missing key parameter'}, status=400)
+
+    # Context extraction
+    user_id = None
+    if request.user.is_authenticated:
+        user_id = str(request.user.id)
+    
+    # Also check distinct_id param for anonymous users tracked by frontend
+    distinct_id = request.query_params.get('distinct_id', user_id)
+    
+    # Determine user tier if logged in (simplified)
+    # In a real app, you'd fetch the user's organization tier
+    # For now, we'll assume 'basic' unless authenticated
+    user_tier = 'basic'
+    # TODO: Fetch actual tier from request.user -> Organization
+        
+    is_enabled = FeatureFlag.is_feature_enabled(
+        key=key,
+        user=request.user if request.user.is_authenticated else None,
+        distinct_id=distinct_id
+        # user_tier=user_tier 
+    )
+    
+    return Response({'key': key, 'is_enabled': is_enabled})
+
+
+# =====================
+# Broadcast Email Endpoints
+# =====================
+
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin, AdminIPAllowlist])
+@throttle_classes([AdminSensitiveOperationThrottle])
+def broadcast_email(request):
+    """
+    Send a broadcast email to a segment of users.
+    
+    POST /v1/admin/broadcast-email/
+    
+    Request body:
+        - subject: str (required)
+        - body: str (required, can include HTML)
+        - segment: str (required) - 'all', 'active', 'inactive', 'tier_basic', 'tier_premium', 'tier_enterprise'
+        - send_test: bool (optional) - Send only to admin for testing
+    """
+    from django.core.mail import send_mass_mail, send_mail
+    from apps.auth.models import User
+    from apps.organizations.models import Membership
+    
+    subject = request.data.get('subject')
+    body = request.data.get('body')
+    segment = request.data.get('segment', 'all')
+    send_test = request.data.get('send_test', False)
+    
+    if not subject or not body:
+        return Response({
+            'error': 'Subject and body are required'
+        }, status=400)
+    
+    # Build recipient list based on segment
+    if send_test:
+        # Only send to the requesting admin
+        recipients = [request.user.email]
+    else:
+        # Get users based on segment
+        users = User.objects.filter(is_active=True, is_email_verified=True)
+        
+        if segment == 'active':
+            # Active users (logged in within last 30 days)
+            from datetime import timedelta
+            cutoff = timezone.now() - timedelta(days=30)
+            users = users.filter(last_login__gte=cutoff)
+        
+        elif segment == 'inactive':
+            # Inactive users (not logged in for 30+ days)
+            from datetime import timedelta
+            cutoff = timezone.now() - timedelta(days=30)
+            users = users.filter(last_login__lt=cutoff)
+        
+        elif segment.startswith('tier_'):
+            # Filter by subscription tier
+            tier = segment.replace('tier_', '')
+            user_ids_with_tier = Membership.objects.filter(
+                organization__subscription__plan=tier
+            ).values_list('user_id', flat=True)
+            users = users.filter(id__in=user_ids_with_tier)
+        
+        recipients = list(users.values_list('email', flat=True))
+    
+    if not recipients:
+        return Response({
+            'error': 'No recipients found for this segment',
+            'segment': segment
+        }, status=400)
+    
+    # Log the action BEFORE sending
+    AdminAuditLog.log(
+        admin=request.user,
+        action='system.config_change',
+        target_type='broadcast_email',
+        target_id='',
+        target_label=f'Broadcast: {subject[:50]}',
+        request=request,
+        details={
+            'segment': segment,
+            'recipient_count': len(recipients),
+            'is_test': send_test,
+            'subject': subject
+        }
+    )
+    
+    # Send emails
+    try:
+        from django.conf import settings
+        from_email = settings.DEFAULT_FROM_EMAIL
+        
+        # For large lists, we should use async/background tasks
+        # For now, send synchronously (consider Celery for production)
+        success_count = 0
+        fail_count = 0
+        
+        for recipient in recipients[:500]:  # Limit to 500 per batch
+            try:
+                send_mail(
+                    subject=subject,
+                    message=body,  # Plain text fallback
+                    from_email=from_email,
+                    recipient_list=[recipient],
+                    html_message=body,
+                    fail_silently=False
+                )
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"Failed to send broadcast email to {recipient}: {e}")
+        
+        return Response({
+            'status': 'success',
+            'recipients_targeted': len(recipients),
+            'sent': success_count,
+            'failed': fail_count,
+            'is_test': send_test,
+            'segment': segment
+        })
+        
+    except Exception as e:
+        logger.error(f"Broadcast email failed: {e}")
+        return Response({
+            'error': f'Failed to send emails: {str(e)}'
+        }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser, AdminIPAllowlist])
+def email_segments(request):
+    """
+    Get available email segments with counts.
+    
+    GET /v1/admin/broadcast-email/segments/
+    """
+    from apps.auth.models import User
+    from apps.organizations.models import Membership
+    from datetime import timedelta
+    
+    cutoff_30d = timezone.now() - timedelta(days=30)
+    
+    # Get base verified users
+    verified_users = User.objects.filter(is_active=True, is_email_verified=True)
+    
+    # Get tier user IDs
+    premium_ids = list(Membership.objects.filter(
+        organization__subscription__plan='premium'
+    ).values_list('user_id', flat=True))
+    
+    enterprise_ids = list(Membership.objects.filter(
+        organization__subscription__plan='enterprise'
+    ).values_list('user_id', flat=True))
+    
+    basic_ids = list(Membership.objects.filter(
+        organization__subscription__plan='basic'
+    ).values_list('user_id', flat=True))
+    
+    segments = [
+        {
+            'id': 'all',
+            'name': 'All Verified Users',
+            'count': verified_users.count(),
+            'description': 'All users with verified emails'
+        },
+        {
+            'id': 'active',
+            'name': 'Active Users (30d)',
+            'count': verified_users.filter(last_login__gte=cutoff_30d).count(),
+            'description': 'Users who logged in within the last 30 days'
+        },
+        {
+            'id': 'inactive',
+            'name': 'Inactive Users (30d+)',
+            'count': verified_users.filter(last_login__lt=cutoff_30d).count(),
+            'description': 'Users who haven\'t logged in for 30+ days'
+        },
+        {
+            'id': 'tier_basic',
+            'name': 'Basic Tier',
+            'count': verified_users.filter(id__in=basic_ids).count(),
+            'description': 'Users on the free basic tier'
+        },
+        {
+            'id': 'tier_premium',
+            'name': 'Premium Tier',
+            'count': verified_users.filter(id__in=premium_ids).count(),
+            'description': 'Users on the premium tier'
+        },
+        {
+            'id': 'tier_enterprise',
+            'name': 'Enterprise Tier',
+            'count': verified_users.filter(id__in=enterprise_ids).count(),
+            'description': 'Users on the enterprise tier'
+        },
+    ]
+    
+    return Response({'segments': segments})

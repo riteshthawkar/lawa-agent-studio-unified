@@ -6,8 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Feedback Status Updated</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: #0a0a0b;
             color: #fafafa;
             margin: 0;
@@ -48,6 +50,8 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            color: #3b82f6;
+            /* Fallback */
         }
 
         h2 {
@@ -108,6 +112,7 @@
             padding: 28px;
             margin: 24px 0;
             text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         .status-arrow {
@@ -118,45 +123,52 @@
         }
 
         .info-box {
-            background: rgba(59, 130, 246, 0.08);
+            background: rgba(39, 39, 42, 0.5);
             border-radius: 10px;
             padding: 20px;
             margin: 24px 0;
-            border-left: 4px solid #3b82f6;
+            border-left: 4px solid #3f3f46;
         }
 
         .info-box h4 {
             margin: 0 0 8px 0;
             font-size: 14px;
             font-weight: 600;
-            color: #60a5fa;
+            color: #e4e4e7;
         }
 
         .info-box p {
             margin: 0;
-            color: #d4d4d8;
+            color: #a1a1aa;
             font-size: 14px;
         }
 
         .message-box {
-            background: rgba(16, 185, 129, 0.08);
-            border-left: 4px solid #10b981;
-            padding: 16px;
+            background: rgba(30, 27, 75, 0.3);
+            /* Dark Indigo tint */
+            border-left: 4px solid #8b5cf6;
+            /* Purple Brand */
+            padding: 24px;
             margin: 24px 0;
-            border-radius: 0 10px 10px 0;
+            border-radius: 8px;
         }
 
         .message-box h4 {
-            margin: 0 0 8px 0;
-            font-size: 14px;
+            margin: 0 0 12px 0;
+            font-size: 15px;
             font-weight: 600;
-            color: #34d399;
+            color: #a78bfa;
+            /* Light Purple */
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .message-box p {
             margin: 0;
-            color: #d4d4d8;
+            color: #e4e4e7;
             white-space: pre-wrap;
+            font-size: 15px;
         }
 
         .btn {
@@ -168,12 +180,19 @@
             border-radius: 10px;
             font-weight: 600;
             font-size: 14px;
-            margin-top: 16px;
+            margin-top: 8px;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+        }
+
+        .btn:hover {
+            box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35);
         }
 
         .btn-secondary {
             background: rgba(255, 255, 255, 0.08);
             border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: none;
+            color: #e4e4e7 !important;
         }
 
         .footer {
@@ -186,7 +205,7 @@
         .divider {
             border: none;
             border-top: 1px solid rgba(255, 255, 255, 0.08);
-            margin: 24px 0;
+            margin: 32px 0;
         }
 
         .resolved-note {
@@ -202,6 +221,10 @@
             color: #6ee7b7;
             font-weight: 600;
             margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
     </style>
 </head>
@@ -225,7 +248,7 @@
             </p>
 
             <div class="status-update-box">
-                <span class="status-badge status-{{ old_status|lower }}">{{ old_status }}</span>
+                <span class="status-badge status-{{ old_status|lower|cut:' ' }}">{{ old_status }}</span>
                 <span class="status-arrow">&rarr;</span>
                 <span class="status-badge status-{{ new_status_value }}">{{ new_status }}</span>
             </div>
@@ -238,8 +261,8 @@
 
             {% if admin_notes %}
             <div class="message-box">
-                <h4>💬 Message from our team:</h4>
-                <p>{{ admin_notes }}</p>
+                <h4>💬 Response from Team:</h4>
+                <p>{{ admin_notes|linebreaksbr }}</p>
             </div>
             {% endif %}
 
@@ -255,10 +278,14 @@
                 questions, please don't hesitate to reach out.</p>
             {% endif %}
 
+            <div style="text-align: center; margin-top: 32px; margin-bottom: 16px;">
+                <a href="{{ feedback_url }}" class="btn">View My Feedback</a>
+            </div>
+
             <hr class="divider">
 
-            <p style="text-align: center; color: #71717a;">
-                Have questions? Visit our Help Center for assistance.
+            <p style="text-align: center; color: #71717a; font-size: 14px; margin-bottom: 12px;">
+                Need more help?
             </p>
 
             <div style="text-align: center;">

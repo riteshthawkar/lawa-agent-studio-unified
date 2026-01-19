@@ -6,6 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, BackgroundTasks, HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -104,6 +105,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------------------------------
+# Exception Handlers
+# ------------------------------------------------------------------------------
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """
+    Custom handler for HTTP exceptions to silence noisy 404 logs from bot probing.
+    """
+    if exc.status_code == 404:
+        # Just return 404 without logging to error log/console
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 # Add health check routes
 app.include_router(health_router)
@@ -354,6 +369,18 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
                  logger.warning(f"Failed to check/resume session {provided_session_id}: {e}")
 
         # 2. If no valid session ID from frontend, create a new one
+        # Check Quota BEFORE creating session
+        org_id = site_info.get('org_id')
+        daily_limit = site_info.get('daily_limit', 100) # Default to basic
+        
+        if org_id:
+             reached, usage = await DjangoChatRepository.check_daily_conversation_limit(
+                 app.state.pool, org_id, daily_limit
+             )
+             if reached:
+                 logger.warning(f"Quota exceeded for org {org_id} (Limit: {daily_limit})")
+                 raise ValueError("Quota Exceeded")
+
         session_data = {
             'connection_type': 'websocket',
             'api_key': api_key,
@@ -378,6 +405,20 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
             session_id = created_session_id
             session_created = True
             logger.info(f"Created Django session {session_id} for site {site_info['site_domain']} (IP: {client_ip or 'unknown'})")
+            
+            # Track Usage Event (New Conversation)
+            if org_id:
+                try:
+                    await DjangoChatRepository.track_usage_event(
+                        app.state.pool,
+                        org_id=org_id,
+                        site_id=site_info['site_id'],
+                        chatbot_id=site_info['chatbot_id'],
+                        session_id=session_id
+                    )
+                except Exception as e:
+                     logger.error(f"Failed to track usage event: {e}")
+
         else:
             logger.warning("Failed to create Django session, continuing without session tracking")
 
@@ -484,7 +525,19 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
             # Lazy session creation - only create/resume session on first actual message
             # This prevents empty sessions from being stored in the database
             # device_type and referrer are passed during creation
-            await ensure_session_created(device_type=device_type, referrer=referrer, provided_session_id=provided_session_id)
+            try:
+                await ensure_session_created(device_type=device_type, referrer=referrer, provided_session_id=provided_session_id)
+            except ValueError as ve:
+                if str(ve) == "Quota Exceeded":
+                    logger.warning(f"Blocking chat request due to quota limits for site {site_info.get('site_domain', 'unknown')}")
+                    await safe_send(websocket, {
+                        "response": "⚠️ Usage Limit Reached: This chatbot has exceeded its daily conversation limit. Please try again tomorrow.",
+                        "sources": [],
+                        "id": str(uuid.uuid4())
+                    })
+                    continue
+                else:
+                    raise ve
             # This allows us to store the query category with the user message
 
             # Apply query rewriting agent with categories for classification

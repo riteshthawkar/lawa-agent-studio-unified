@@ -159,8 +159,10 @@ class FeedbackNotificationService:
             'wont_fix': "Won't Fix",
         }
 
-        # Build help center URL
-        help_center_url = f"{getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')}/help-center"
+        # Build help center and feedback URLs
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+        help_center_url = f"{frontend_url}/help-center"
+        feedback_url = f"{frontend_url}/feedback"
 
         # Prepare template context
         context = {
@@ -174,6 +176,7 @@ class FeedbackNotificationService:
             'submitted_at': feedback.created_at.strftime('%B %d, %Y'),
             'updated_at': timezone.now().strftime('%B %d, %Y at %I:%M %p UTC'),
             'help_center_url': help_center_url,
+            'feedback_url': feedback_url,
             'user_name': feedback.user.name if feedback.user and hasattr(feedback.user, 'name') else None,
         }
 

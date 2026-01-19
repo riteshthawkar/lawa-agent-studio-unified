@@ -10,7 +10,8 @@ import logging
 from typing import Optional, Dict, Any
 from modules.config import (
     DB_HOST, DB_PORT, DB_NAME, 
-    DB_USER, DB_PASSWORD, INTEGRATION_MODE
+    DB_USER, DB_PASSWORD, INTEGRATION_MODE,
+    get_tier_limits
 )
 
 logger = logging.getLogger(__name__)
@@ -119,10 +120,13 @@ class LawaIntegration:
                         s.domain as site_domain,
                         s.name as site_name,
                         s.status as site_status,
-                        s.active_namespace
+                        s.active_namespace,
+                        o.id as org_id,
+                        o.plan_tier
                     FROM chatbots c
                     JOIN sites s ON c.site_id = s.id
-                    WHERE c.api_key = $1 AND c.status = 'active' AND s.status = 'active'
+                    JOIN organizations o ON s.org_id = o.id
+                    WHERE c.api_key = $1 AND c.status = 'active' AND s.status = 'active' AND o.status = 'active'
                 """
 
                 result = await conn.fetchrow(query, api_key)
@@ -156,6 +160,9 @@ class LawaIntegration:
                         'site_domain': result['site_domain'],
                         'site_name': result['site_name'],
                         'namespace': namespace,
+                        'org_id': str(result['org_id']),
+                        'plan_tier': result['plan_tier'],
+                        'daily_limit': get_tier_limits(result['plan_tier'])['daily_conversations'],
                         'query_categories': categories,
                         'description': result['description'] or '',
                         'greeting_message': result['greeting_message'] or 'Hello! How can I help you today?',
