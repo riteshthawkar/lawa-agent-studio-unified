@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from django.conf import settings
+from django.utils import timezone
 from .models import Site, ExcludedURLPattern
 import re
 
@@ -8,12 +10,14 @@ class SiteSerializer(serializers.ModelSerializer):
     namespace = serializers.ReadOnlyField(source='get_namespace')
     excluded_patterns_count = serializers.SerializerMethodField()
     active_excluded_patterns_count = serializers.SerializerMethodField()
+    is_verified = serializers.ReadOnlyField()
 
     class Meta:
         model = Site
         fields = (
             'id', 'name', 'domain', 'status', 'namespace', 'last_indexed_at',
             'created_at', 'indexed_pages_count', 'total_documents',
+            'verification_mode', 'verification_method', 'verified_at', 'is_verified',
             'max_pages', 'crawl_delay', 'respect_robots', 'include_subdomains',
             'scrape_all_subdomains', 'enable_javascript', 'enable_pdf_processing',
             'enable_dynamic_content', 'indexing_config',
@@ -32,13 +36,15 @@ class SiteSerializer(serializers.ModelSerializer):
 
 class SiteCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating sites with indexing configuration"""
+    public_content_acknowledged = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = Site
         fields = (
             'name', 'domain', 'max_pages', 'crawl_delay', 'respect_robots',
             'include_subdomains', 'scrape_all_subdomains', 'enable_javascript',
-            'enable_pdf_processing', 'enable_dynamic_content', 'indexing_config'
+            'enable_pdf_processing', 'enable_dynamic_content', 'indexing_config',
+            'verification_mode', 'verification_method', 'public_content_acknowledged'
         )
         extra_kwargs = {
             'max_pages': {'min_value': 1}
@@ -85,21 +91,79 @@ class SiteCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """Create site with indexing configuration"""
-        # Automatically set site as active
-        validated_data['status'] = 'active'
+        public_ack = validated_data.pop('public_content_acknowledged', False)
+        verification_mode = validated_data.get('verification_mode') or getattr(
+            settings, 'SITE_VERIFICATION_DEFAULT_MODE', 'required'
+        )
+        validated_data['verification_mode'] = verification_mode
+        
+        # Ensure verification_method has a default
+        if 'verification_method' not in validated_data:
+            validated_data['verification_method'] = 'dns'
+
+        if verification_mode == 'public':
+            require_ack = getattr(settings, 'SITE_VERIFICATION_REQUIRE_PUBLIC_ACK', True)
+            if require_ack and not public_ack:
+                raise serializers.ValidationError({
+                    'public_content_acknowledged': 'Acknowledgment is required for public mode.'
+                })
+            validated_data['public_acknowledged_at'] = timezone.now()
+            if not getattr(settings, 'SITE_PUBLIC_ALLOW_SUBDOMAINS', False):
+                validated_data['include_subdomains'] = False
+                validated_data['scrape_all_subdomains'] = False
+            if not getattr(settings, 'SITE_PUBLIC_ALLOW_DYNAMIC_CONTENT', False):
+                validated_data['enable_dynamic_content'] = False
+            validated_data['respect_robots'] = True
+
+        # Set status based on verification policy
+        if getattr(settings, 'SITE_VERIFICATION_ENABLED', True) and verification_mode == 'required':
+            validated_data['status'] = 'inactive'
+        else:
+            validated_data['status'] = 'active'
         return super().create(validated_data)
 
 
 class SiteUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating site settings"""
+    public_content_acknowledged = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = Site
         fields = (
             'status', 'max_pages', 'crawl_delay', 'respect_robots',
             'include_subdomains', 'scrape_all_subdomains', 'enable_javascript',
-            'enable_pdf_processing', 'enable_dynamic_content', 'indexing_config'
+            'enable_pdf_processing', 'enable_dynamic_content', 'indexing_config',
+            'verification_mode', 'verification_method', 'public_content_acknowledged'
         )
+
+    def validate(self, attrs):
+        verification_mode = attrs.get('verification_mode')
+        public_ack = attrs.pop('public_content_acknowledged', False)
+
+        if verification_mode == 'public':
+            require_ack = getattr(settings, 'SITE_VERIFICATION_REQUIRE_PUBLIC_ACK', True)
+            if require_ack and not public_ack:
+                raise serializers.ValidationError({
+                    'public_content_acknowledged': 'Acknowledgment is required for public mode.'
+                })
+            attrs['public_acknowledged_at'] = timezone.now()
+            if not getattr(settings, 'SITE_PUBLIC_ALLOW_SUBDOMAINS', False):
+                attrs['include_subdomains'] = False
+                attrs['scrape_all_subdomains'] = False
+            if not getattr(settings, 'SITE_PUBLIC_ALLOW_DYNAMIC_CONTENT', False):
+                attrs['enable_dynamic_content'] = False
+            attrs['respect_robots'] = True
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        verification_mode = validated_data.get('verification_mode')
+        if verification_mode == 'required' and getattr(settings, 'SITE_VERIFICATION_ENABLED', True):
+            if not instance.is_verified:
+                validated_data.setdefault('status', 'inactive')
+        elif verification_mode == 'public':
+            validated_data.setdefault('status', 'active')
+        return super().update(instance, validated_data)
 
     def validate_max_pages(self, value):
         """Validate max_pages"""
@@ -115,6 +179,19 @@ class SiteUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Crawl delay cannot be negative")
         if value > 30:
             raise serializers.ValidationError("Crawl delay cannot exceed 30 seconds")
+        return value
+
+
+class SiteVerificationSerializer(serializers.Serializer):
+    """Serializer for site verification requests"""
+    verification_method = serializers.ChoiceField(
+        choices=Site.VERIFICATION_METHOD_CHOICES,
+        required=False
+    )
+
+    def validate_verification_method(self, value):
+        if value not in dict(Site.VERIFICATION_METHOD_CHOICES):
+            raise serializers.ValidationError("Invalid verification method")
         return value
 
 
