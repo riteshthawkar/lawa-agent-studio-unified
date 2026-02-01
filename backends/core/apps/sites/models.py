@@ -1,10 +1,21 @@
 from django.db import models
+from django.conf import settings
 from apps.core.models import BaseModel
 import re
+import secrets
 
 
 class Site(BaseModel):
     """Site model with indexing configuration"""
+    VERIFICATION_METHOD_CHOICES = [
+        ('dns', 'DNS'),
+        ('file', 'File'),
+    ]
+    VERIFICATION_MODE_CHOICES = [
+        ('required', 'Required'),
+        ('public', 'Public'),
+    ]
+
     name = models.CharField(max_length=255, blank=True, help_text="Knowledge Base name")
     # Scope uniqueness to organization instead of global
     domain = models.CharField(max_length=255)
@@ -20,6 +31,33 @@ class Site(BaseModel):
     )
     # Organization context for multi-tenancy
     org_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    # Verification
+    verification_method = models.CharField(
+        max_length=10,
+        choices=VERIFICATION_METHOD_CHOICES,
+        default='dns',
+        help_text="Verification method for domain ownership"
+    )
+    verification_token = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Verification token for domain ownership checks"
+    )
+    verified_at = models.DateTimeField(null=True, blank=True, help_text="When the site was verified")
+    verification_mode = models.CharField(
+        max_length=20,
+        choices=VERIFICATION_MODE_CHOICES,
+        default='required',
+        help_text="Whether verification is required or public mode is allowed"
+    )
+    public_acknowledged_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when public content acknowledgment was accepted"
+    )
 
     last_indexed_at = models.DateTimeField(null=True, blank=True)
 
@@ -75,12 +113,36 @@ class Site(BaseModel):
     def __str__(self):
         return f"{self.domain}"
 
+    @property
+    def is_verified(self):
+        return bool(self.verified_at)
+
+    def requires_verification(self):
+        if not getattr(settings, 'SITE_VERIFICATION_ENABLED', True):
+            return False
+        return self.verification_mode == 'required'
+
     def get_namespace(self):
         """Get the namespace for this site"""
         # Return DB stored namespace if available, else fallback to default format
         if self.active_namespace:
             return self.active_namespace
         return f"site_{self.id}"
+
+    def _generate_verification_token(self):
+        for _ in range(5):
+            token = secrets.token_urlsafe(32)
+            if not self.__class__.objects.filter(verification_token=token).exists():
+                return token
+        raise RuntimeError("Failed to generate unique verification token")
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get('update_fields')
+        if not self.verification_token:
+            self.verification_token = self._generate_verification_token()
+            if update_fields is not None:
+                kwargs['update_fields'] = set(update_fields) | {'verification_token'}
+        super().save(*args, **kwargs)
 
     def get_excluded_patterns(self):
         """Get list of active excluded URL patterns for this site"""
