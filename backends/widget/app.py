@@ -12,7 +12,16 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 # Import modules
-from modules.config import logger, validate_env_vars, get_system_prompt, RAG_APP_NAME, OPENAI_TIMEOUT, INTEGRATION_MODE, LAWA_PINECONE_INDEX_NAME
+from modules.config import (
+    logger,
+    validate_env_vars,
+    get_system_prompt,
+    RAG_APP_NAME,
+    OPENAI_TIMEOUT,
+    INTEGRATION_MODE,
+    LAWA_PINECONE_INDEX_NAME,
+    CHAT_MODEL_NAME,
+)
 from modules.schemas import ChatRequest
 from modules.utils import safe_send, format_query
 from modules.citations import process_citations
@@ -252,6 +261,7 @@ async def test_chat_endpoint(api_key: str, request: TestChatRequest):
         formatted_query = format_query(agent_result.get("final_query", question), language, final_docs)
         # Setup system prompt with context
         chatbot_config = site_info.get('chatbot_config', {}) if site_info else {}
+        model_name = chatbot_config.get("model_name") or chatbot_config.get("model") or CHAT_MODEL_NAME
         system_prompt = get_system_prompt(
             site_domain=site_info['site_domain'] if site_info else None,
             organization_name=site_info.get('site_name') if site_info else None,
@@ -263,7 +273,7 @@ async def test_chat_endpoint(api_key: str, request: TestChatRequest):
         )
         
         response = await openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": formatted_query}
@@ -665,6 +675,7 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
 
                 # Extract chatbot configuration
                 chatbot_config = site_info.get('chatbot_config', {}) if site_info else {}
+                model_name = chatbot_config.get("model_name") or chatbot_config.get("model") or CHAT_MODEL_NAME
 
                 system_prompt = get_system_prompt(
                     site_domain=site_info['site_domain'] if site_info else None,
@@ -676,7 +687,7 @@ async def lawa_websocket_endpoint(websocket: WebSocket, api_key: str):
 
                 # Use streaming for better UX - send chunks as they arrive
                 stream = await openai_client.chat.completions.create(
-                    model="gpt-4o",
+                    model=model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": formatted_query}

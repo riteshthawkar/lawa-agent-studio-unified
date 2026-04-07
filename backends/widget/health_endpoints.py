@@ -10,8 +10,9 @@ from datetime import datetime
 from typing import Dict, Any
 from fastapi import APIRouter, HTTPException
 from modules.database.database import connect_db
-from modules.config import get_config, INTEGRATION_MODE
+from modules.config import get_config, INTEGRATION_MODE, CHAT_MODEL_NAME
 from modules.lawa_integration import LawaIntegration
+from modules.query_rewriting import openai_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,6 +24,10 @@ lawa_integration = None
 async def get_db_pool():
     """Get or create database pool instance."""
     global db_pool
+    if INTEGRATION_MODE == "lawa":
+        integration = await get_lawa_integration()
+        return integration.pool if integration and integration.enabled else None
+
     if db_pool is None:
         db_pool = await connect_db()
     return db_pool
@@ -91,7 +96,11 @@ async def health_detailed():
         try:
             from pinecone import Pinecone
             config = get_config()
-            pc = Pinecone(api_key=config.PINECONE_API_KEY)
+            pinecone_api_key = getattr(config, "PINECONE_API_KEY", None)
+            if not pinecone_api_key:
+                raise ValueError("PINECONE_API_KEY is not configured")
+
+            pc = Pinecone(api_key=pinecone_api_key)
             
             if INTEGRATION_MODE == "lawa":
                 # LAWA mode - single unified index
@@ -152,6 +161,25 @@ async def health_detailed():
                     "message": f"LAWA integration failed: {str(e)}"
                 }
                 overall_status = "unhealthy"
+
+        # Check OpenAI/model readiness
+        openai_start = time.time()
+        try:
+            await openai_client.models.retrieve(CHAT_MODEL_NAME)
+            openai_duration = (time.time() - openai_start) * 1000
+            checks["openai"] = {
+                "status": "healthy" if openai_duration < 1500 else "degraded",
+                "response_time_ms": openai_duration,
+                "message": f"Model {CHAT_MODEL_NAME} is available"
+            }
+            if openai_duration >= 1500 and overall_status == "healthy":
+                overall_status = "degraded"
+        except Exception as e:
+            checks["openai"] = {
+                "status": "unhealthy",
+                "message": f"OpenAI model check failed: {str(e)}"
+            }
+            overall_status = "unhealthy"
         
         # Check external services
         external_start = time.time()
@@ -160,8 +188,8 @@ async def health_detailed():
             
             # Check Django backend
             config = get_config()
-            django_url = getattr(config, 'DJANGO_BACKEND_URL', 'http://localhost:8001')
-            django_response = requests.get(f"{django_url}/health", timeout=5)
+            django_url = getattr(config, 'DJANGO_BACKEND_URL', 'http://localhost:8000')
+            django_response = requests.get(f"{django_url}/health/", timeout=5)
             django_healthy = django_response.status_code == 200
             
             external_duration = (time.time() - external_start) * 1000
@@ -210,7 +238,13 @@ async def health_detailed():
             
             if memory_percentage > 90 or disk_percentage > 90:
                 overall_status = "unhealthy"
-                
+        except ImportError:
+            checks["system_resources"] = {
+                "status": "degraded",
+                "message": "psutil not installed; skipping system resource metrics"
+            }
+            if overall_status == "healthy":
+                overall_status = "degraded"
         except Exception as e:
             checks["system_resources"] = {
                 "status": "unhealthy",

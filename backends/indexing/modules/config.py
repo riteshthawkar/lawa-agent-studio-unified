@@ -250,7 +250,7 @@ class PipelineConfig:
     
     # API Keys and external service URLs
     pinecone_api_key: str = ""
-    django_backend_url: str = "http://localhost:8001"
+    django_backend_url: str = "http://localhost:8000"
     
     # Sub-configurations
     crawler: CrawlerConfig = field(default_factory=CrawlerConfig)

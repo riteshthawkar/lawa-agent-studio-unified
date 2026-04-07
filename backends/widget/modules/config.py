@@ -61,6 +61,7 @@ TOTAL_DOCS_TO_RERANK = int(os.getenv("TOTAL_DOCS_TO_RERANK", 20))
 
 # OpenAI request timeout (seconds)
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "30"))
+CHAT_MODEL_NAME = os.getenv("CHAT_MODEL_NAME", os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini"))
 
 # Hybrid search weighting and embedding model configuration
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.5"))
@@ -496,7 +497,7 @@ class AppConfig:
         self.PINECONE_INDEX_NAME = PINECONE_INDEX_NAME
         self.PINECONE_SUMMARY_INDEX = os.getenv("PINECONE_SUMMARY_INDEX_NAME", "mbzuai-summary-only-index-latest")
         self.PINECONE_TEXT_INDEX = os.getenv("PINECONE_TEXT_INDEX_NAME", "mbzuai-text-only-index-latest")
-        self.DJANGO_BACKEND_URL = os.getenv("DJANGO_BACKEND_URL", "http://localhost:8001")
+        self.DJANGO_BACKEND_URL = os.getenv("DJANGO_BACKEND_URL", "http://localhost:8000")
 
 def get_config():
     """Get configuration object"""

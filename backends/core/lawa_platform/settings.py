@@ -30,7 +30,17 @@ SECRET_KEY = env('SECRET_KEY', default=_secret_key_default)
 if SECRET_KEY == _secret_key_default and not DEBUG:
     raise ValueError("SECRET_KEY must be set in production!")
 
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '0.0.0.0'])
+default_allowed_hosts = ['localhost', '127.0.0.1', '0.0.0.0']
+for extra_host_var in ('PUBLIC_HOSTNAME', 'PUBLIC_IP', 'DROPLET_IP', 'HEALTHCHECK_HOST'):
+    extra_host = env(extra_host_var, default='').strip()
+    if extra_host and extra_host not in default_allowed_hosts:
+        default_allowed_hosts.append(extra_host)
+
+for extra_host in env.list('HEALTHCHECK_ALLOWED_HOSTS', default=[]):
+    if extra_host and extra_host not in default_allowed_hosts:
+        default_allowed_hosts.append(extra_host)
+
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=default_allowed_hosts)
 
 # Security: Allow disabling CORS for public APIs if needed (default False)
 CORS_ALLOW_ALL_ORIGINS = env.bool('CORS_ALLOW_ALL_ORIGINS', default=False)

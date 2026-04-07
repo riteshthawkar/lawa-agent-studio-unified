@@ -6,13 +6,70 @@ Provides health monitoring for the indexing service.
 import time
 import logging
 import psutil
+import httpx
 from datetime import datetime
 from typing import Dict, Any
 from fastapi import APIRouter, HTTPException
 from modules.django_database import db_manager
+from modules.config import get_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def check_database_health() -> Dict[str, Any]:
+    """Run an async-safe database probe through the shared Django DB manager."""
+    db_start = time.time()
+
+    try:
+        await db_manager.get_task_stats()
+        db_duration = (time.time() - db_start) * 1000
+        return {
+            "status": "healthy" if db_duration < 1000 else "degraded",
+            "response_time_ms": db_duration,
+            "message": "Django database connected successfully",
+        }
+    except Exception as exc:
+        return {
+            "status": "unhealthy",
+            "response_time_ms": (time.time() - db_start) * 1000,
+            "message": f"Database connection failed: {exc}",
+        }
+
+
+async def check_django_backend_health() -> Dict[str, Any]:
+    """Verify the indexing service can reach the Django core backend."""
+    config = get_config()
+    django_url = config.django_backend_url.rstrip("/")
+    health_url = f"{django_url}/health/"
+    start = time.time()
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(health_url)
+
+        duration = (time.time() - start) * 1000
+        if response.status_code == 200:
+            return {
+                "status": "healthy" if duration < 1000 else "degraded",
+                "response_time_ms": duration,
+                "message": "Django backend reachable",
+                "url": health_url,
+            }
+
+        return {
+            "status": "unhealthy",
+            "response_time_ms": duration,
+            "message": f"Django backend returned {response.status_code}",
+            "url": health_url,
+        }
+    except Exception as exc:
+        return {
+            "status": "unhealthy",
+            "response_time_ms": (time.time() - start) * 1000,
+            "message": f"Django backend check failed: {exc}",
+            "url": health_url,
+        }
 
 
 @router.get("/health")
@@ -39,29 +96,8 @@ async def health_detailed():
     overall_status = "healthy"
     
     try:
-        # Check database connectivity (Django ORM)
-        db_start = time.time()
-        
-        try:
-            # Test Django database connection
-            from django.db import connection
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-            
-            db_duration = (time.time() - db_start) * 1000
-            
-            checks["database"] = {
-                "status": "healthy" if db_duration < 1000 else "degraded",
-                "response_time_ms": db_duration,
-                "message": "Django database connected successfully"
-            }
-        except Exception as e:
-            checks["database"] = {
-                "status": "unhealthy",
-                "response_time_ms": (time.time() - db_start) * 1000,
-                "message": f"Database connection failed: {str(e)}"
-            }
+        checks["database"] = await check_database_health()
+        if checks["database"]["status"] == "unhealthy":
             overall_status = "degraded"
         
         # Check system resources
@@ -89,17 +125,21 @@ async def health_detailed():
             }
             overall_status = "degraded"
         
-        # Check external services
+        django_backend = await check_django_backend_health()
         checks["external_services"] = {
+            "django_backend": django_backend,
             "pinecone": {
                 "status": "unknown",
                 "message": "Pinecone status not checked (requires API key)"
             },
             "gemini": {
-                "status": "unknown", 
+                "status": "unknown",
                 "message": "Gemini status not checked (requires API key)"
             }
         }
+
+        if django_backend["status"] == "unhealthy":
+            overall_status = "degraded"
         
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -127,11 +167,9 @@ async def health_ready():
     Returns 200 if service is ready to accept requests.
     """
     try:
-        # Check if Django database is accessible
-        from django.db import connection
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
+        db_health = await check_database_health()
+        if db_health["status"] == "unhealthy":
+            raise RuntimeError(db_health["message"])
         
         return {
             "status": "ready",
