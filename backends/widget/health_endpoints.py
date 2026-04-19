@@ -1,290 +1,360 @@
 """
-Health Check Endpoints for Chatbot Backend
-Provides health monitoring for the chatbot service.
+Health endpoints for the chatbot widget backend.
+Implements monitoring-contract/v1 with backward compatibility for /health.
 """
 
-import asyncio
+import os
 import time
 import logging
-from datetime import datetime
-from typing import Dict, Any
-from fastapi import APIRouter, HTTPException
+from datetime import datetime, timezone
+from typing import Any
+
+import psutil
+import requests
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from openai import AsyncOpenAI
+from pinecone import Pinecone
+
 from modules.database.database import connect_db
-from modules.config import get_config, INTEGRATION_MODE
+from modules.config import get_config, INTEGRATION_MODE, OPENAI_TIMEOUT
 from modules.lawa_integration import LawaIntegration
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Global instances
+HEALTHY = "healthy"
+DEGRADED = "degraded"
+UNHEALTHY = "unhealthy"
+CONTRACT_VERSION = "monitoring-contract/v1"
+
+# Global lazy singletons
 db_pool = None
 lawa_integration = None
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def component(status: str, **fields: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"status": status}
+    payload.update({k: v for k, v in fields.items() if v is not None})
+    return payload
+
+
+def aggregate_status(checks: dict[str, dict[str, Any]]) -> str:
+    statuses = [check.get("status", UNHEALTHY) for check in checks.values()]
+    if any(status == UNHEALTHY for status in statuses):
+        return UNHEALTHY
+    if any(status == DEGRADED for status in statuses):
+        return DEGRADED
+    return HEALTHY
+
+
+def status_code(status: str) -> int:
+    return 503 if status == UNHEALTHY else 200
+
+
+def release_metadata() -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "version": os.getenv("RELEASE_VERSION", "unknown"),
+    }
+    commit_sha = os.getenv("RELEASE_COMMIT_SHA")
+    deployed_at = os.getenv("RELEASE_DEPLOYED_AT")
+    if commit_sha and commit_sha != "unknown":
+        payload["commitSha"] = commit_sha
+    if deployed_at and deployed_at != "unknown":
+        payload["deployedAt"] = deployed_at
+    return payload
+
+
+def operations_metadata() -> dict[str, Any]:
+    payload = {
+        "owner": os.getenv("SERVICE_OWNER"),
+        "runbook_url": os.getenv("RUNBOOK_URL"),
+        "dashboard_service_id": os.getenv("DASHBOARD_SERVICE_ID"),
+        "repository_url": os.getenv("REPOSITORY_URL"),
+        "public_base_url": os.getenv("PUBLIC_BASE_URL"),
+    }
+    return {k: v for k, v in payload.items() if v}
+
+
+def build_contract_payload(
+    *,
+    endpoint_label: str,
+    checks: dict[str, dict[str, Any]],
+    status: str | None = None,
+    journey: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved_status = status or aggregate_status(checks)
+    payload: dict[str, Any] = {
+        "version": CONTRACT_VERSION,
+        "service": {
+            "id": os.getenv("SERVICE_IDENTIFIER", "lawa-agent-studio-widget"),
+            "name": os.getenv("SERVICE_DISPLAY_NAME", "LAWA Agent Studio Chatbot"),
+            "type": os.getenv("SERVICE_TYPE", "rag"),
+            "environment": os.getenv("SERVICE_ENVIRONMENT", os.getenv("ENVIRONMENT", "unknown")),
+        },
+        "status": resolved_status,
+        "summary": f"{endpoint_label} checks {'passed' if resolved_status == HEALTHY else 'degraded' if resolved_status == DEGRADED else 'failed'}",
+        "timestamp": utc_timestamp(),
+        "checks": checks,
+        "release": release_metadata(),
+    }
+    operations = operations_metadata()
+    if operations:
+        payload["operations"] = operations
+    if journey is not None:
+        payload["journey"] = journey
+    return payload
+
 
 async def get_db_pool():
-    """Get or create database pool instance."""
     global db_pool
     if db_pool is None:
         db_pool = await connect_db()
     return db_pool
 
+
 async def get_lawa_integration():
-    """Get or create LAWA integration instance."""
     global lawa_integration
     if lawa_integration is None and INTEGRATION_MODE == "lawa":
         lawa_integration = LawaIntegration()
         await lawa_integration.initialize()
     return lawa_integration
 
+
+async def database_check() -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        pool = await get_db_pool()
+        if not pool:
+            return component(UNHEALTHY, error="database pool not initialized")
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        return component(HEALTHY if latency_ms < 1000 else DEGRADED, latency_ms=latency_ms)
+    except Exception as exc:
+        return component(UNHEALTHY, error=str(exc))
+
+
+def pinecone_check() -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        config = get_config()
+        pc = Pinecone(api_key=config.PINECONE_API_KEY)
+        if INTEGRATION_MODE == "lawa":
+            index = pc.Index(config.PINECONE_INDEX_NAME)
+        else:
+            index = pc.Index(config.PINECONE_SUMMARY_INDEX)
+        stats = index.describe_index_stats()
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        total_vector_count = stats.get("total_vector_count", 0) if isinstance(stats, dict) else None
+        return component(
+            HEALTHY if latency_ms < 2000 else DEGRADED,
+            latency_ms=latency_ms,
+            integration_mode=INTEGRATION_MODE,
+            total_vector_count=total_vector_count,
+        )
+    except Exception as exc:
+        return component(UNHEALTHY, error=str(exc))
+
+
+def openai_config_check() -> dict[str, Any]:
+    model = os.getenv("GENERATION_MODEL", "gpt-4o")
+    if not os.getenv("OPENAI_API_KEY"):
+        return component(UNHEALTHY, error="OPENAI_API_KEY is not configured")
+    return component(HEALTHY, generation_model=model)
+
+
+def django_backend_check() -> dict[str, Any]:
+    started = time.perf_counter()
+    backend_url = os.getenv("DJANGO_BACKEND_URL", "http://localhost:8000").rstrip("/")
+    target_url = f"{backend_url}/health/live"
+    try:
+        response = requests.get(target_url, timeout=5)
+        payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        reported_status = payload.get("status")
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        if response.status_code == 200 and reported_status in {HEALTHY, "alive", "ready"}:
+            return component(HEALTHY, latency_ms=latency_ms, url=target_url)
+        return component(
+            DEGRADED,
+            latency_ms=latency_ms,
+            url=target_url,
+            error=f"unexpected response {response.status_code} status={reported_status}",
+        )
+    except Exception as exc:
+        return component(UNHEALTHY, url=target_url, error=str(exc))
+
+
+async def lawa_integration_check() -> dict[str, Any]:
+    if INTEGRATION_MODE != "lawa":
+        return component(HEALTHY, mode="legacy")
+    started = time.perf_counter()
+    try:
+        integration = await get_lawa_integration()
+        if not integration or not integration.enabled:
+            return component(UNHEALTHY, error="LAWA integration not enabled")
+        async with integration.pool.acquire() as conn:
+            await conn.fetchval("SELECT COUNT(*) FROM chatbots LIMIT 1")
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        return component(HEALTHY if latency_ms < 1000 else DEGRADED, latency_ms=latency_ms, mode="lawa")
+    except Exception as exc:
+        return component(UNHEALTHY, error=str(exc), mode="lawa")
+
+
+def system_resources_check() -> dict[str, Any]:
+    try:
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        memory_pct = memory.percent
+        disk_pct = disk.percent
+        status = HEALTHY
+        if memory_pct > 90 or disk_pct > 90:
+            status = UNHEALTHY
+        elif memory_pct > 80 or disk_pct > 80:
+            status = DEGRADED
+        return component(
+            status,
+            memory_percentage=memory_pct,
+            disk_percentage=disk_pct,
+            available_memory_gb=round(memory.available / (1024**3), 2),
+            available_disk_gb=round(disk.free / (1024**3), 2),
+        )
+    except Exception as exc:
+        return component(UNHEALTHY, error=str(exc))
+
+
+async def journey_probe() -> tuple[dict[str, Any], dict[str, dict[str, Any]], str]:
+    started = time.perf_counter()
+    checks = {
+        "database": await database_check(),
+        "pinecone": pinecone_check(),
+        "openai": openai_config_check(),
+        "lawa_integration": await lawa_integration_check(),
+    }
+    preflight = aggregate_status(checks)
+    model = os.getenv("GENERATION_MODEL", "gpt-4o")
+    if preflight == UNHEALTHY:
+        return (
+            {
+                "name": "llm_generation",
+                "status": UNHEALTHY,
+                "probeModeSupported": True,
+                "sideEffects": "none",
+                "durationMs": int((time.perf_counter() - started) * 1000),
+                "message": "preflight dependency checks failed",
+            },
+            checks,
+            UNHEALTHY,
+        )
+
+    try:
+        completion = await openai_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a health probe. Reply with exactly: OK"},
+                {"role": "user", "content": "Probe"},
+            ],
+            temperature=0,
+            max_tokens=8,
+            timeout=OPENAI_TIMEOUT,
+        )
+        content = completion.choices[0].message.content if completion and completion.choices else ""
+        probe_text = (content or "").strip()
+        if not probe_text:
+            checks["journey_generation"] = component(UNHEALTHY, error="empty generation output", model=model)
+            journey_status = UNHEALTHY
+            journey_message = "generation returned empty output"
+        else:
+            checks["journey_generation"] = component(HEALTHY, model=model, preview=probe_text[:80])
+            journey_status = aggregate_status(checks)
+            journey_message = "generation path healthy"
+    except Exception as exc:
+        checks["journey_generation"] = component(UNHEALTHY, model=model, error=str(exc))
+        journey_status = UNHEALTHY
+        journey_message = str(exc)
+
+    journey = {
+        "name": "llm_generation",
+        "status": journey_status,
+        "probeModeSupported": True,
+        "sideEffects": "none",
+        "durationMs": int((time.perf_counter() - started) * 1000),
+        "message": journey_message[:200],
+    }
+    return journey, checks, journey_status
+
+
 @router.get("/health")
 async def health_check():
-    """
-    Basic health check endpoint.
-    Returns 200 if service is running.
-    """
-    return {
-        "status": "healthy",
-        "service": "lawa-chatbot-backend",
-        "integration_mode": INTEGRATION_MODE,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    return await health_ready()
 
-@router.get("/health/detailed")
-async def health_detailed():
-    """
-    Detailed health check endpoint.
-    Returns comprehensive health status.
-    """
-    start_time = time.time()
-    checks = {}
-    overall_status = "healthy"
-    
-    try:
-        # Check database connectivity
-        db_start = time.time()
-        try:
-            db_pool = await get_db_pool()
-            if db_pool:
-                async with db_pool.acquire() as conn:
-                    await conn.fetchval("SELECT 1")
-                db_duration = (time.time() - db_start) * 1000
-                
-                checks["database"] = {
-                    "status": "healthy" if db_duration < 1000 else "degraded",
-                    "response_time_ms": db_duration,
-                    "message": "Database connected successfully"
-                }
-            else:
-                checks["database"] = {
-                    "status": "unhealthy",
-                    "message": "Database pool not initialized"
-                }
-                overall_status = "unhealthy"
-        except Exception as e:
-            checks["database"] = {
-                "status": "unhealthy",
-                "message": f"Database connection failed: {str(e)}"
-            }
-            overall_status = "unhealthy"
-        
-        # Check Pinecone connectivity
-        pinecone_start = time.time()
-        try:
-            from pinecone import Pinecone
-            config = get_config()
-            pc = Pinecone(api_key=config.PINECONE_API_KEY)
-            
-            if INTEGRATION_MODE == "lawa":
-                # LAWA mode - single unified index
-                index = pc.Index(config.PINECONE_INDEX_NAME)
-            else:
-                # Legacy mode - separate indexes
-                summary_index = pc.Index(config.PINECONE_SUMMARY_INDEX)
-                text_index = pc.Index(config.PINECONE_TEXT_INDEX)
-                index = summary_index  # Use summary index for stats
-            
-            # Test index stats
-            stats = index.describe_index_stats()
-            pinecone_duration = (time.time() - pinecone_start) * 1000
-            
-            checks["pinecone"] = {
-                "status": "healthy" if pinecone_duration < 2000 else "degraded",
-                "response_time_ms": pinecone_duration,
-                "message": "Pinecone connected successfully",
-                "details": {
-                    "integration_mode": INTEGRATION_MODE,
-                    "total_vector_count": stats.get("total_vector_count", 0),
-                    "dimension": stats.get("dimension", 0)
-                }
-            }
-        except Exception as e:
-            checks["pinecone"] = {
-                "status": "unhealthy",
-                "message": f"Pinecone connection failed: {str(e)}"
-            }
-            overall_status = "unhealthy"
-        
-        # Check LAWA integration (if enabled)
-        if INTEGRATION_MODE == "lawa":
-            lawa_start = time.time()
-            try:
-                lawa_integration = await get_lawa_integration()
-                if lawa_integration and lawa_integration.enabled:
-                    # Test LAWA database connection
-                    async with lawa_integration.pool.acquire() as conn:
-                        await conn.fetchval("SELECT COUNT(*) FROM chatbots LIMIT 1")
-                    
-                    lawa_duration = (time.time() - lawa_start) * 1000
-                    
-                    checks["lawa_integration"] = {
-                        "status": "healthy" if lawa_duration < 1000 else "degraded",
-                        "response_time_ms": lawa_duration,
-                        "message": "LAWA integration connected successfully"
-                    }
-                else:
-                    checks["lawa_integration"] = {
-                        "status": "unhealthy",
-                        "message": "LAWA integration not enabled or failed to initialize"
-                    }
-                    overall_status = "unhealthy"
-            except Exception as e:
-                checks["lawa_integration"] = {
-                    "status": "unhealthy",
-                    "message": f"LAWA integration failed: {str(e)}"
-                }
-                overall_status = "unhealthy"
-        
-        # Check external services
-        external_start = time.time()
-        try:
-            import requests
-            
-            # Check Django backend
-            config = get_config()
-            django_url = getattr(config, 'DJANGO_BACKEND_URL', 'http://localhost:8001')
-            django_response = requests.get(f"{django_url}/health", timeout=5)
-            django_healthy = django_response.status_code == 200
-            
-            external_duration = (time.time() - external_start) * 1000
-            
-            checks["external_services"] = {
-                "status": "healthy" if django_healthy else "degraded",
-                "response_time_ms": external_duration,
-                "message": "External services check completed",
-                "details": {
-                    "django_backend": "healthy" if django_healthy else "unhealthy"
-                }
-            }
-            
-            if not django_healthy:
-                overall_status = "degraded"
-                
-        except Exception as e:
-            checks["external_services"] = {
-                "status": "unhealthy",
-                "message": f"External services check failed: {str(e)}"
-            }
-            overall_status = "unhealthy"
-        
-        # Check system resources
-        try:
-            import psutil
-            
-            # Memory usage
-            memory = psutil.virtual_memory()
-            memory_percentage = memory.percent
-            
-            # Disk usage
-            disk = psutil.disk_usage('/')
-            disk_percentage = (disk.used / disk.total) * 100
-            
-            checks["system_resources"] = {
-                "status": "healthy" if memory_percentage < 80 and disk_percentage < 80 else "degraded",
-                "message": f"Memory: {memory_percentage:.1f}%, Disk: {disk_percentage:.1f}%",
-                "details": {
-                    "memory_percentage": memory_percentage,
-                    "disk_percentage": disk_percentage,
-                    "available_memory_gb": memory.available / (1024**3),
-                    "available_disk_gb": disk.free / (1024**3)
-                }
-            }
-            
-            if memory_percentage > 90 or disk_percentage > 90:
-                overall_status = "unhealthy"
-                
-        except Exception as e:
-            checks["system_resources"] = {
-                "status": "unhealthy",
-                "message": f"System resource check failed: {str(e)}"
-            }
-            overall_status = "unhealthy"
-        
-        total_duration = (time.time() - start_time) * 1000
-        
-        return {
-            "status": overall_status,
-            "service": "lawa-chatbot-backend",
-            "integration_mode": INTEGRATION_MODE,
-            "timestamp": datetime.utcnow().isoformat(),
-            "duration_ms": total_duration,
-            "checks": checks,
-            "summary": {
-                "healthy": sum(1 for check in checks.values() if check["status"] == "healthy"),
-                "degraded": sum(1 for check in checks.values() if check["status"] == "degraded"),
-                "unhealthy": sum(1 for check in checks.values() if check["status"] == "unhealthy")
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "service": "lawa-chatbot-backend",
-            "integration_mode": INTEGRATION_MODE,
-            "timestamp": datetime.utcnow().isoformat(),
-            "error": str(e),
-            "checks": checks
-        }
-
-@router.get("/health/ready")
-async def health_ready():
-    """
-    Readiness probe for Kubernetes.
-    Returns 200 if service is ready to accept traffic.
-    """
-    try:
-        # Check critical dependencies
-        db_pool = await get_db_pool()
-        if not db_pool:
-            raise HTTPException(status_code=503, detail="Database not ready")
-        
-        async with db_pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-        
-        return {
-            "status": "ready",
-            "service": "lawa-chatbot-backend",
-            "integration_mode": INTEGRATION_MODE
-        }
-        
-    except Exception as e:
-        logger.error(f"Readiness check failed: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": "not_ready",
-                "error": str(e),
-                "service": "lawa-chatbot-backend"
-            }
-        )
 
 @router.get("/health/live")
 async def health_live():
-    """
-    Liveness probe for Kubernetes.
-    Returns 200 if service is alive (not deadlocked).
-    """
-    return {
-        "status": "alive",
-        "service": "lawa-chatbot-backend",
-        "integration_mode": INTEGRATION_MODE
+    checks = {
+        "application": component(HEALTHY),
+        "process": component(HEALTHY, pid=os.getpid()),
+        "contract": component(HEALTHY, version=CONTRACT_VERSION),
     }
+    payload = build_contract_payload(endpoint_label="live", checks=checks, status=HEALTHY)
+    return payload
+
+
+@router.get("/health/ready")
+async def health_ready():
+    checks = {
+        "database": await database_check(),
+        "pinecone": pinecone_check(),
+        "openai": openai_config_check(),
+        "lawa_integration": await lawa_integration_check(),
+    }
+    overall = aggregate_status(checks)
+    payload = build_contract_payload(endpoint_label="ready", checks=checks, status=overall)
+    return JSONResponse(status_code=status_code(overall), content=payload)
+
+
+@router.get("/health/detailed")
+async def health_detailed():
+    checks = {
+        "database": await database_check(),
+        "pinecone": pinecone_check(),
+        "openai": openai_config_check(),
+        "lawa_integration": await lawa_integration_check(),
+        "external_services": {
+            "status": HEALTHY,
+            "django_backend": django_backend_check(),
+        },
+        "system_resources": system_resources_check(),
+    }
+    checks["external_services"]["status"] = aggregate_status(
+        {"django_backend": checks["external_services"]["django_backend"]}
+    )
+    overall = aggregate_status(
+        {
+            "database": checks["database"],
+            "pinecone": checks["pinecone"],
+            "openai": checks["openai"],
+            "lawa_integration": checks["lawa_integration"],
+            "external_services": checks["external_services"],
+            "system_resources": checks["system_resources"],
+        }
+    )
+    payload = build_contract_payload(endpoint_label="detailed", checks=checks, status=overall)
+    return JSONResponse(status_code=status_code(overall), content=payload)
+
+
+@router.get("/health/journey")
+async def health_journey():
+    journey, checks, overall = await journey_probe()
+    payload = build_contract_payload(
+        endpoint_label="journey",
+        checks=checks,
+        status=overall,
+        journey=journey,
+    )
+    return JSONResponse(status_code=status_code(overall), content=payload)
